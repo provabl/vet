@@ -57,12 +57,12 @@ jobs:
           GOARCH: ${{ matrix.GOARCH }}
         run: |
           mkdir -p dist
-          BINARY="dist/ground-${{ steps.version.outputs.VERSION }}-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+          BINARY="dist/vet-${{ steps.version.outputs.VERSION }}-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
           go build \
             -trimpath \
             -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
             -o "${BINARY}" \
-            ./cmd/ground
+            ./cmd/vet
           echo "BINARY=${BINARY}" >> "$GITHUB_ENV"
 
       - name: Attest build provenance (SLSA Level 2)
