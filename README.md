@@ -28,6 +28,10 @@ vet gate    image:tag            # write Cedar workload attributes for attest
 
 🚧 **Under active development** — initial CLI being built.
 
+## Open source
+
+vet is fully open source (Apache 2.0) with no commercial tier. It integrates with [attest](https://attest.provabl.dev) by writing Cedar workload attributes that the attest Cedar PDP evaluates. See [COMMERCIAL.md](COMMERCIAL.md).
+
 ## License
 
-Apache 2.0
+Apache 2.0. Copyright 2026 Scott Friedman.
