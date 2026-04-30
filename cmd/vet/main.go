@@ -275,6 +275,12 @@ func runGate(artifactRef, vetDir, policyPath string) error {
 		return err
 	}
 
+	if result.MissingRecord {
+		fmt.Fprintf(os.Stderr, "warning: no verification record found for %s\n", artifactRef)
+		fmt.Fprintf(os.Stderr, "  Run 'vet verify %s' first to populate the record.\n", artifactRef)
+		fmt.Fprintf(os.Stderr, "  Proceeding with unverified defaults (fail-closed).\n\n")
+	}
+
 	fmt.Printf("Gate evaluation: %s\n\n", artifactRef)
 	fmt.Printf("  context.workload.SLSALevel    = %d\n", result.GateResult.SLSALevel)
 	fmt.Printf("  context.workload.SBOMPresent  = %v\n", result.GateResult.SBOMPresent)

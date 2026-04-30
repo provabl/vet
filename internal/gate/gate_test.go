@@ -70,12 +70,24 @@ func TestGatePolicyViolationMinSLSA(t *testing.T) {
 	}
 }
 
-func TestGateNoRecordReturnsError(t *testing.T) {
+func TestGateNoRecordWritesFailClosedResult(t *testing.T) {
 	s := store.New(t.TempDir())
 	e := gate.New(s, gate.DefaultPolicy())
-	_, err := e.Evaluate("no-record:latest")
-	if err == nil {
-		t.Error("expected error when no record exists")
+	result, err := e.Evaluate("no-record:latest")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.MissingRecord {
+		t.Error("expected MissingRecord=true when no record exists")
+	}
+	if result.PolicyMet {
+		t.Error("expected PolicyMet=false (fail-closed) when no record exists")
+	}
+	if result.GateResult == nil {
+		t.Error("expected gate result to be written even when no verification record exists")
+	}
+	if result.GateResult.Signed || result.GateResult.SLSALevel != 0 {
+		t.Error("expected all workload attributes to be false/zero (fail-closed defaults)")
 	}
 }
 

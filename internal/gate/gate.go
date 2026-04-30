@@ -59,22 +59,47 @@ func New(s *store.Store, p *Policy) *Evaluator {
 
 // EvaluateResult is the result of a gate evaluation.
 type EvaluateResult struct {
-	ArtifactRef  string
-	ArtifactHash string
-	PolicyMet    bool
-	Failures     []string
-	GateResult   *store.GateResult
+	ArtifactRef   string
+	ArtifactHash  string
+	PolicyMet     bool
+	MissingRecord bool   // true when no prior 'vet verify' record exists
+	Failures      []string
+	GateResult    *store.GateResult
 }
 
 // Evaluate looks up the verification record for artifactRef and evaluates it
 // against the policy. Writes gate-result.json with Cedar workload attributes.
+//
+// If no verification record exists (vet verify was never run for this artifact),
+// Evaluate writes a fail-closed gate result (PolicyMet=false, all attributes false/0)
+// and returns an EvaluateResult with a MissingRecord flag set. Callers should print
+// the guidance message to steer operators toward running 'vet verify' first.
 func (e *Evaluator) Evaluate(artifactRef string) (*EvaluateResult, error) {
 	rec, err := e.store.LoadRecord(artifactRef)
 	if err != nil {
 		return nil, fmt.Errorf("load record: %w", err)
 	}
 	if rec == nil {
-		return nil, fmt.Errorf("no verification record found for %q — run 'vet verify' first", artifactRef)
+		// No record exists — write a fail-closed gate result and return with
+		// MissingRecord=true so the caller can print actionable guidance.
+		gateResult := &store.GateResult{
+			Artifact:    artifactRef,
+			Signed:      false,
+			SLSALevel:   0,
+			SBOMPresent: false,
+			CVECritical: false,
+			CVEHigh:     false,
+			PolicyMet:   false,
+			EvaluatedAt: time.Now(),
+		}
+		_ = e.store.SaveGateResult(gateResult) // best-effort; don't mask the real error
+		return &EvaluateResult{
+			ArtifactRef:   artifactRef,
+			PolicyMet:     false,
+			MissingRecord: true,
+			Failures:      []string{"no verification record — run 'vet verify <artifact>' before 'vet gate'"},
+			GateResult:    gateResult,
+		}, nil
 	}
 
 	var failures []string
