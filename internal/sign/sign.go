@@ -61,6 +61,9 @@ type SignResult struct {
 // For container images, uses `cosign sign`. For blobs, uses `cosign sign-blob`.
 // The subject is embedded in the OIDC certificate (GitHub Actions workflow path).
 func (s *Signer) Sign(ctx context.Context, artifactRef string) (*SignResult, error) {
+	if strings.HasPrefix(artifactRef, "-") {
+		return nil, fmt.Errorf("invalid artifact ref %q: cannot start with a flag character (-)", artifactRef)
+	}
 	if err := requireCosign(ctx, s.runner); err != nil {
 		return nil, err
 	}

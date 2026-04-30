@@ -80,6 +80,9 @@ type VerifyResult struct {
 // Returns a non-nil error only for infrastructure failures (e.g., cosign not installed).
 // Policy failures are recorded in result.Failures.
 func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options) (*VerifyResult, error) {
+	if strings.HasPrefix(artifactRef, "-") {
+		return nil, fmt.Errorf("invalid artifact ref %q: cannot start with a flag character (-)", artifactRef)
+	}
 	result := &VerifyResult{ArtifactRef: artifactRef}
 
 	// 1. Signature verification
