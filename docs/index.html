@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vet — Software supply chain verification for AWS Secure Research Environments</title>
+    <meta name="description" content="vet verifies software artifacts before they access sensitive data in an SRE. Sign, verify SLSA provenance, generate SBOMs, and write Cedar workload attributes.">
+    <meta name="theme-color" content="#f8fafc">
+    <script>(function(){var t=localStorage.getItem('theme')||'light';document.documentElement.setAttribute('data-theme',t);}());</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&display=swap">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
+    <nav class="nav" role="navigation" aria-label="Main navigation">
+        <div class="nav-container">
+            <div class="nav-brand-group">
+                <a href="https://provabl.dev" class="nav-suite">provabl</a>
+                <span class="nav-sep" aria-hidden="true">/</span>
+                <span class="nav-product">vet</span>
+            </div>
+            <button class="hamburger" id="hamburger-btn" aria-label="Toggle navigation" aria-expanded="false" aria-controls="nav-links">
+                <span></span><span></span><span></span>
+            </button>
+            <div class="nav-links" id="nav-links">
+                <a href="#how-it-works">How it works</a>
+                <a href="#commands">Commands</a>
+                <a href="#spore-host">Test case</a>
+                <a href="https://github.com/provabl/vet" target="_blank" rel="noopener noreferrer" aria-label="GitHub (opens in new tab)">GitHub</a>
+                <button class="btn-theme" id="theme-toggle" aria-label="Toggle color theme">
+                    <span id="theme-icon" aria-hidden="true">🌙</span>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main id="main-content">
+        <div class="container">
+
+            <header class="hero">
+                <div class="hero-eyebrow">Software Layer</div>
+                <h1 class="product-accent">vet</h1>
+                <p class="hero-sub">
+                    Verify software artifacts before they access sensitive data.
+                    Where qualify qualifies the <em>person</em>, vet qualifies the <em>software</em>.
+                </p>
+                <div class="hero-buttons">
+                    <a href="#how-it-works" class="btn btn-accent">How it works</a>
+                    <a href="https://github.com/provabl/vet" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">GitHub</a>
+                </div>
+            </header>
+
+            <!-- How it works -->
+            <section id="how-it-works" class="section" aria-labelledby="how-heading">
+                <h2 id="how-heading">How it works</h2>
+                <p class="section-intro">vet is the software supply chain layer of the Provabl suite. Training gates the person. vet gates the software.</p>
+
+                <div class="flow">
+                    <div class="flow-step">
+                        <div class="flow-num">1</div>
+                        <div class="flow-body">
+                            <h3>Sign at build time</h3>
+                            <p>Sign artifacts using Sigstore keyless signing — no private key needed. Identity from GitHub Actions OIDC. Signature written to Rekor transparency log.</p>
+                            <div class="code-block">
+                                <pre><code><span class="cm"># In your GitHub Actions release workflow</span>
+<span class="accent-cmd">vet</span> sign pipeline:v1.2 --subject ci@github.com/org/repo
+<span class="out"># ✓ Signed via Sigstore keyless, Rekor log ID: abc123</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flow-arrow" aria-hidden="true">↓</div>
+                    <div class="flow-step">
+                        <div class="flow-num">2</div>
+                        <div class="flow-body">
+                            <h3>Verify before access</h3>
+                            <p>Verify SLSA provenance attestation and CVE status. Fail fast if the artifact doesn't meet policy — before it touches any sensitive data.</p>
+                            <div class="code-block">
+                                <pre><code><span class="accent-cmd">vet</span> verify pipeline:v1.2 \
+  --source github.com/org/repo \
+  --min-slsa-level 2 \
+  --check-cves critical
+<span class="out"># ✓ SLSA L2 provenance verified</span>
+<span class="out"># ✓ No critical CVEs in SBOM</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flow-arrow" aria-hidden="true">↓</div>
+                    <div class="flow-step">
+                        <div class="flow-num">3</div>
+                        <div class="flow-body">
+                            <h3>Gate via Cedar attributes</h3>
+                            <p>Write workload verification results as Cedar attributes. attest's Cedar PDP evaluates these alongside training tags — no unverified software accesses CUI data.</p>
+                            <div class="code-block">
+                                <pre><code><span class="accent-cmd">vet</span> gate pipeline:v1.2 --policy .vet/policy.yaml
+<span class="out"># ✓ context.workload.SLSALevel = 2</span>
+<span class="out"># ✓ context.workload.CVECritical = false</span>
+<span class="out"># ✓ Cedar attributes written — attest PDP re-evaluates</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flow-arrow" aria-hidden="true">↓</div>
+                    <div class="flow-step">
+                        <div class="flow-num">4</div>
+                        <div class="flow-body">
+                            <h3>attest Cedar policy enforces it</h3>
+                            <p>attest's Cedar policies can require workload verification before granting data access — combining training compliance with software supply chain integrity.</p>
+                            <div class="code-block">
+                                <pre><code><span class="cm"># Cedar policy in attest (compiled from framework):</span>
+permit(principal, action, resource in ResourceGroup::"cui-data")
+when {
+  principal.CUITrainingCurrent == true  <span class="cm">// from qualify</span>
+  &amp;&amp; context.workload.SLSALevel &gt;= 2   <span class="cm">// from vet</span>
+  &amp;&amp; context.workload.CVECritical == false
+};</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Commands -->
+            <section id="commands" class="section" aria-labelledby="cmd-heading">
+                <h2 id="cmd-heading">Commands</h2>
+                <p class="section-intro">Four commands, one pipeline: sign → verify → sbom → gate.</p>
+                <div class="cmd-grid">
+                    <div class="cmd-card">
+                        <div class="cmd-name"><code>vet sign</code></div>
+                        <p>Sign any artifact — container image, binary, S3 model artifact — using Sigstore keyless signing. Outputs <code>.sig</code> file and Rekor log ID.</p>
+                        <div class="code-block">
+                            <pre><code>vet sign image:tag
+vet sign ./binary --subject user@inst.edu
+vet sign s3://bucket/model.tar.gz</code></pre>
+                        </div>
+                    </div>
+                    <div class="cmd-card">
+                        <div class="cmd-name"><code>vet verify</code></div>
+                        <p>Verify cosign signature, SLSA provenance attestation, and optionally CVE status. Configurable minimum SLSA level.</p>
+                        <div class="code-block">
+                            <pre><code>vet verify image:tag --min-slsa-level 2
+vet verify ./binary --source github.com/org/repo
+vet verify image:tag --check-cves critical</code></pre>
+                        </div>
+                    </div>
+                    <div class="cmd-card">
+                        <div class="cmd-name"><code>vet sbom</code></div>
+                        <p>Generate a Software Bill of Materials in SPDX or CycloneDX format and attach a signed attestation to the GitHub attestation API.</p>
+                        <div class="code-block">
+                            <pre><code>vet sbom image:tag --format spdx --attest
+vet sbom image:tag --format cyclonedx
+vet sbom ./binary --format spdx</code></pre>
+                        </div>
+                    </div>
+                    <div class="cmd-card">
+                        <div class="cmd-name"><code>vet gate</code></div>
+                        <p>Write verification results as Cedar workload attributes. Integrates with attest's Cedar PDP for policy-based access control.</p>
+                        <div class="code-block">
+                            <pre><code>vet gate image:tag --policy .vet/policy.yaml
+<span class="cm"># writes: SLSALevel, SBOMPresent,
+#         CVECritical, CVEHigh, Signed</span></code></pre>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- spore.host test case -->
+            <section id="spore-host" class="section" aria-labelledby="spore-heading">
+                <h2 id="spore-heading">Reference test case: spore.host</h2>
+                <p class="section-intro">
+                    <a href="https://spore.host" target="_blank" rel="noopener noreferrer">spore.host</a> is vet's reference implementation test case.
+                    It exercises the hardest supply chain scenarios because of how it works: a binary that runs on a researcher's laptop, deploys EC2 instances into an AWS account, uses images from another account, and needs a compliant SRE-resident variant.
+                </p>
+
+                <div class="scenarios">
+                    <div class="scenario">
+                        <div class="scenario-num">1</div>
+                        <div class="scenario-body">
+                            <h3>Local binary verification</h3>
+                            <p>The <code>spawn</code> binary runs on the researcher's laptop. Before it can assume an IAM role in a CUI environment, vet verifies its SLSA provenance from the GitHub Actions release pipeline.</p>
+                            <div class="code-block">
+                                <pre><code>vet verify ~/bin/spawn \
+  --source github.com/scttfrdmn/mycelium \
+  --min-slsa-level 2
+<span class="out"># ✓ Provenance: built by github.com/scttfrdmn/mycelium@v1.4.0</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="scenario">
+                        <div class="scenario-num">2</div>
+                        <div class="scenario-body">
+                            <h3>Cross-account AMI trust</h3>
+                            <p>spore.host launches instances using AMIs that may originate from a different AWS account. vet verifies the AMI owner is in an approved allowlist and checks for critical CVEs in base OS packages.</p>
+                            <div class="code-block">
+                                <pre><code>vet verify ami-0abcd1234 --type ami \
+  --allowed-owner-ids 123456789012 \
+  --check-cves critical
+<span class="out"># ✓ AMI owner: 123456789012 (approved)</span>
+<span class="out"># ✓ No critical CVEs in base image packages</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="scenario">
+                        <div class="scenario-num">3</div>
+                        <div class="scenario-body">
+                            <h3>Laptop → SRE trust boundary</h3>
+                            <p>For CUI environments, an unverified local binary calling SRE APIs is a compliance gap. vet's Cedar gate + ground's IAM trust policy condition close it: the SRE only grants access when the calling binary has a valid <code>vet:slsa-level</code> claim.</p>
+                            <div class="code-block">
+                                <pre><code>vet gate spawn-v1.4.0
+<span class="out"># Writes context.workload.SLSALevel=2 for IAM trust evaluation</span>
+
+<span class="cm"># ground deploys this trust condition on the researcher role:</span>
+<span class="cm"># "aws:PrincipalTag/vet:slsa-level": ["2", "3"]</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="scenario">
+                        <div class="scenario-num">4</div>
+                        <div class="scenario-body">
+                            <h3>SRE-resident compliant mode</h3>
+                            <p>For the most sensitive environments, spore.host can run as a container inside the SRE rather than on a researcher's laptop. This is the reference implementation of a fully vet-certified workload.</p>
+                            <div class="code-block">
+                                <pre><code>vet sign provabl/spawn-sre:v1.4.0
+vet sbom provabl/spawn-sre:v1.4.0 --format spdx --attest
+vet verify provabl/spawn-sre:v1.4.0 --min-slsa-level 2
+vet gate provabl/spawn-sre:v1.4.0
+<span class="out"># ✓ Container certified for SRE deployment</span></code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <div class="container">
+        <footer role="contentinfo">
+            <div class="footer-inner">
+                <div>
+                    <div class="footer-suite">
+                        <a href="https://provabl.dev">provabl</a> /
+                        <span class="product-accent">vet</span>
+                    </div>
+                    <p class="footer-sub">Apache 2.0 · under active development</p>
+                </div>
+                <nav class="footer-links" aria-label="Suite navigation">
+                    <a href="https://attest.provabl.dev">attest</a>
+                    <a href="https://ground.provabl.dev">ground</a>
+                    <a href="https://qualify.provabl.dev">qualify</a>
+                    <a href="https://github.com/provabl/vet">GitHub</a>
+                    <a href="https://github.com/provabl/vet/issues">Issues</a>
+                </nav>
+            </div>
+            <div class="footer-bottom">
+                <span>Made by <a href="https://github.com/scttfrdmn">@scttfrdmn</a></span>
+                <span>Apache 2.0</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
