@@ -171,7 +171,7 @@ vet sbom ./binary --format spdx</code></pre>
                 <h2 id="spore-heading">Reference test case: spore.host</h2>
                 <p class="section-intro">
                     <a href="https://spore.host" target="_blank" rel="noopener noreferrer">spore.host</a> is vet's reference implementation test case.
-                    It exercises the hardest supply chain scenarios because of how it works: a binary that runs on a researcher's laptop, deploys EC2 instances into an AWS account, uses images from another account, and needs a compliant SRE-resident variant.
+                    It exercises the hardest supply chain scenarios because of how it works: a binary that runs on a user's laptop, deploys EC2 instances into an AWS account, uses images from another account, and needs a compliant SRE-resident variant.
                 </p>
 
                 <div class="scenarios">
@@ -179,7 +179,7 @@ vet sbom ./binary --format spdx</code></pre>
                         <div class="scenario-num">1</div>
                         <div class="scenario-body">
                             <h3>Local binary verification</h3>
-                            <p>The <code>spawn</code> binary runs on the researcher's laptop. Before it can assume an IAM role in a CUI environment, vet verifies its SLSA provenance from the GitHub Actions release pipeline.</p>
+                            <p>The <code>spawn</code> binary runs on the user's laptop. Before it can assume an IAM role in a CUI environment, vet verifies its SLSA provenance from the GitHub Actions release pipeline.</p>
                             <div class="code-block">
                                 <pre><code>vet verify ~/bin/spawn \
   --source github.com/scttfrdmn/mycelium \
@@ -213,7 +213,7 @@ vet sbom ./binary --format spdx</code></pre>
                                 <pre><code>vet gate spawn-v1.4.0
 <span class="out"># Writes context.workload.SLSALevel=2 for IAM trust evaluation</span>
 
-<span class="cm"># ground deploys this trust condition on the researcher role:</span>
+<span class="cm"># ground deploys this trust condition on the user role:</span>
 <span class="cm"># "aws:PrincipalTag/vet:slsa-level": ["2", "3"]</span></code></pre>
                             </div>
                         </div>
@@ -223,7 +223,7 @@ vet sbom ./binary --format spdx</code></pre>
                         <div class="scenario-num">4</div>
                         <div class="scenario-body">
                             <h3>SRE-resident compliant mode</h3>
-                            <p>For the most sensitive environments, spore.host can run as a container inside the SRE rather than on a researcher's laptop. This is the reference implementation of a fully vet-certified workload.</p>
+                            <p>For the most sensitive environments, spore.host can run as a container inside the SRE rather than on a user's laptop. This is the reference implementation of a fully vet-certified workload.</p>
                             <div class="code-block">
                                 <pre><code>vet sign provabl/spawn-sre:v1.4.0
 vet sbom provabl/spawn-sre:v1.4.0 --format spdx --attest
