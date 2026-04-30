@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: 2026 Scott Friedman
+# SPDX-License-Identifier: Apache-2.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write       # upload release assets
+  id-token: write       # OIDC for cosign keyless signing + SLSA provenance
+  attestations: write   # GitHub attestation API (SLSA L2 + SBOM)
+
+jobs:
+  build:
+    name: Build (${{ matrix.GOOS }}/${{ matrix.GOARCH }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            GOOS: linux
+            GOARCH: amd64
+          - os: ubuntu-latest
+            GOOS: linux
+            GOARCH: arm64
+          - os: macos-latest
+            GOOS: darwin
+            GOARCH: amd64
+          - os: macos-latest
+            GOOS: darwin
+            GOARCH: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.GOOS }}
+          GOARCH: ${{ matrix.GOARCH }}
+        run: |
+          mkdir -p dist
+          BINARY="dist/ground-${{ steps.version.outputs.VERSION }}-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
+            -o "${BINARY}" \
+            ./cmd/ground
+          echo "BINARY=${BINARY}" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance (SLSA Level 2)
+        id: attest-provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.BINARY }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign binary (cosign keyless)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${BINARY}.sig" \
+            --output-certificate "${BINARY}.pem" \
+            "${BINARY}"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.BINARY }}
+            ${{ env.BINARY }}.sig
+            ${{ env.BINARY }}.pem
+          fail_on_unmatched_files: true
+
+  sbom:
+    name: SBOM
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+          sbom-path: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+
+      - name: Upload SBOM to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+          fail_on_unmatched_files: true

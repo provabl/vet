@@ -1,0 +1,7 @@
+version = 1
+
+[[annotations]]
+path = ["**.json", "**.yaml", "**.yml", "**.sql", "**.md", "**.toml", "**.cedar", "**.cast"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Scott Friedman"
+SPDX-License-Identifier = "Apache-2.0"
