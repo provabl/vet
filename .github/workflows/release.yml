@@ -116,18 +116,18 @@ jobs:
         with:
           path: .
           format: spdx-json
-          output-file: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+          output-file: vet-${{ steps.version.outputs.VERSION }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
 
       - name: Attest SBOM
         uses: actions/attest-sbom@v2
         with:
-          subject-path: ground-${{ steps.version.outputs.VERSION }}.spdx.json
-          sbom-path: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+          subject-path: vet-${{ steps.version.outputs.VERSION }}.spdx.json
+          sbom-path: vet-${{ steps.version.outputs.VERSION }}.spdx.json
 
       - name: Upload SBOM to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ground-${{ steps.version.outputs.VERSION }}.spdx.json
+          files: vet-${{ steps.version.outputs.VERSION }}.spdx.json
           fail_on_unmatched_files: true
