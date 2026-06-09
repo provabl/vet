@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-09
+
 ### Added
 
 - **Verdict produced through the provabl/evidence kernel** (#9): `vet gate` now appraises via the
@@ -64,6 +66,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **`vet.provabl.dev`** documentation site (GitHub Pages).
 - Test coverage: sign, verify, store, gate with mock runner interface.
 
-[Unreleased]: https://github.com/provabl/vet/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/provabl/vet/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/provabl/vet/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/provabl/vet/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/provabl/vet/releases/tag/v0.1.0
