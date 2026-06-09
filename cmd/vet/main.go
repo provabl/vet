@@ -159,15 +159,19 @@ func runVerify(artifactRef, vetDir string, opts verify.Options) error {
 	}
 
 	if opts.CheckCVEs != "" {
-		if !result.CVECritical && !result.CVEHigh {
-			fmt.Println("  ✓ No critical/high CVEs found")
-		} else {
-			if result.CVECritical {
-				fmt.Println("  ✗ Critical CVEs found")
-			}
+		switch {
+		case result.CVECritical:
+			fmt.Println("  ✗ Critical CVEs found")
 			if result.CVEHigh {
 				fmt.Println("  ✗ High CVEs found")
 			}
+		case result.CVEHigh:
+			fmt.Println("  ✗ High CVEs found")
+		case !result.SBOMPresent:
+			// The CVE gate could not run; the policy violation below explains it.
+			fmt.Println("  ✗ CVE check could not run (no SBOM)")
+		default:
+			fmt.Println("  ✓ No critical/high CVEs found")
 		}
 	}
 
