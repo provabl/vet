@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Scott Friedman
+// SPDX-FileCopyrightText: 2026 Playground Logic LLC
 // SPDX-License-Identifier: Apache-2.0
 
 // Package vetasp is vet's (ASP, appraiser) pair for the provabl/evidence kernel.
