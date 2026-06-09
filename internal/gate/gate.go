@@ -7,12 +7,20 @@
 package gate
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
-	"github.com/provabl/vet/internal/store"
+	"github.com/provabl/evidence/asp"
+	"github.com/provabl/evidence/cvm"
+	"github.com/provabl/evidence/lower"
+	"github.com/provabl/evidence/term"
 	"gopkg.in/yaml.v3"
+
+	vetasp "github.com/provabl/vet/internal/evidence"
+	"github.com/provabl/vet/internal/store"
 )
 
 // Policy is the vet verification policy (.vet/policy.yaml).
@@ -62,91 +70,133 @@ type EvaluateResult struct {
 	ArtifactRef   string
 	ArtifactHash  string
 	PolicyMet     bool
-	MissingRecord bool   // true when no prior 'vet verify' record exists
+	MissingRecord bool // true when no prior 'vet verify' record exists
 	Failures      []string
 	GateResult    *store.GateResult
 }
 
 // Evaluate looks up the verification record for artifactRef and evaluates it
-// against the policy. Writes gate-result.json with Cedar workload attributes.
+// against the policy, producing the verdict THROUGH the provabl/evidence kernel:
+// it runs the canonical Copland term Seq(Nonce, Seq(Meas, Sig)) through the CVM,
+// appraises the resulting evidence bundle, and lowers the verdict to the Cedar
+// workload attributes written to gate-result.json. The judgment is no longer
+// hand-rolled here — it lives in vet's (ASP, appraiser) pair (internal/evidence).
 //
 // If no verification record exists (vet verify was never run for this artifact),
-// Evaluate writes a fail-closed gate result (PolicyMet=false, all attributes false/0)
-// and returns an EvaluateResult with a MissingRecord flag set. Callers should print
-// the guidance message to steer operators toward running 'vet verify' first.
-func (e *Evaluator) Evaluate(artifactRef string) (*EvaluateResult, error) {
-	rec, err := e.store.LoadRecord(artifactRef)
+// the measurer returns a CollectFailed measurement; appraisal fails the spine of
+// claims, and Evaluate writes a fail-closed gate result (PolicyMet=false, all
+// attributes false/0) with MissingRecord=true so the caller can print guidance.
+func (e *Evaluator) Evaluate(ctx context.Context, artifactRef string) (*EvaluateResult, error) {
+	reg := asp.NewRegistry()
+	if err := reg.Register(vetasp.Provider(vetasp.StoreSource{Store: e.store})); err != nil {
+		return nil, fmt.Errorf("register vet provider: %w", err)
+	}
+	am, err := vetasp.NewEphemeralAM()
 	if err != nil {
-		return nil, fmt.Errorf("load record: %w", err)
+		return nil, err
 	}
-	if rec == nil {
-		// No record exists — write a fail-closed gate result and return with
-		// MissingRecord=true so the caller can print actionable guidance.
-		gateResult := &store.GateResult{
-			Artifact:    artifactRef,
-			Signed:      false,
-			SLSALevel:   0,
-			SBOMPresent: false,
-			CVECritical: false,
-			CVEHigh:     false,
-			PolicyMet:   false,
-			EvaluatedAt: time.Now(),
-		}
-		_ = e.store.SaveGateResult(gateResult) // best-effort; don't mask the real error
-		return &EvaluateResult{
-			ArtifactRef:   artifactRef,
-			PolicyMet:     false,
-			MissingRecord: true,
-			Failures:      []string{"no verification record — run 'vet verify <artifact>' before 'vet gate'"},
-			GateResult:    gateResult,
-		}, nil
+	c := cvm.New(reg, am, am, nil)
+
+	// Policy values flow to the appraiser through the term's params, so the
+	// kernel — not gate — applies them.
+	params := term.Params{}
+	if e.policy.MinSLSALevel > 0 {
+		params["min_slsa_level"] = strconv.Itoa(e.policy.MinSLSALevel)
 	}
-
-	var failures []string
-
-	if !rec.Signed {
-		failures = append(failures, "artifact is not signed — run 'vet sign' first")
+	if e.policy.CVEThreshold != "" {
+		params["cve_threshold"] = e.policy.CVEThreshold
 	}
+	protocol := term.Seq(
+		term.Nonce(),
+		term.Seq(
+			term.Meas(term.Self, vetasp.ID, vetasp.Target(artifactRef), params),
+			term.Sig(),
+		),
+	)
 
-	if e.policy.MinSLSALevel > 0 && rec.SLSALevel < e.policy.MinSLSALevel {
-		failures = append(failures,
-			fmt.Sprintf("SLSA level %d is below minimum %d", rec.SLSALevel, e.policy.MinSLSALevel))
+	bundle, ch, err := c.Run(ctx, protocol)
+	if err != nil {
+		return nil, fmt.Errorf("run attestation: %w", err)
+	}
+	verdict, err := c.Appraise(ctx, bundle, ch)
+	if err != nil {
+		return nil, fmt.Errorf("appraise: %w", err)
 	}
 
-	switch e.policy.CVEThreshold {
-	case "critical":
-		if rec.CVECritical {
-			failures = append(failures, "critical CVEs found in artifact SBOM")
-		}
-	case "high":
-		if rec.CVECritical || rec.CVEHigh {
-			failures = append(failures, "high or critical CVEs found in artifact SBOM")
-		}
-	}
+	attrs := lower.ToAttributes(verdict)
+	missingRecord := isMissingRecord(verdict)
+	gateResult := gateResultFromAttrs(artifactRef, attrs, verdict.Pass)
 
-	policyMet := len(failures) == 0
-
-	gateResult := &store.GateResult{
-		Artifact:     artifactRef,
-		ArtifactHash: rec.ArtifactHash,
-		SLSALevel:    rec.SLSALevel,
-		SBOMPresent:  rec.SBOMPresent,
-		CVECritical:  rec.CVECritical,
-		CVEHigh:      rec.CVEHigh,
-		Signed:       rec.Signed,
-		PolicyMet:    policyMet,
-		EvaluatedAt:  time.Now(),
-	}
-
-	if err := e.store.SaveGateResult(gateResult); err != nil {
+	// Best-effort on the missing-record path (don't mask a real save error
+	// otherwise), matching prior behavior.
+	if missingRecord {
+		_ = e.store.SaveGateResult(gateResult)
+	} else if err := e.store.SaveGateResult(gateResult); err != nil {
 		return nil, fmt.Errorf("save gate result: %w", err)
 	}
 
+	failures := failuresFromVerdict(verdict)
+	if missingRecord {
+		failures = []string{"no verification record — run 'vet verify <artifact>' before 'vet gate'"}
+	}
+
 	return &EvaluateResult{
-		ArtifactRef:  artifactRef,
-		ArtifactHash: rec.ArtifactHash,
-		PolicyMet:    policyMet,
-		Failures:     failures,
-		GateResult:   gateResult,
+		ArtifactRef:   artifactRef,
+		ArtifactHash:  gateResult.ArtifactHash,
+		PolicyMet:     verdict.Pass,
+		MissingRecord: missingRecord,
+		Failures:      failures,
+		GateResult:    gateResult,
 	}, nil
+}
+
+// isMissingRecord reports whether the bundle's only finding was that the
+// measurement could not be taken (CollectFailed) — surfaced by the kernel as a
+// "<asp>.collected=false" claim and the absence of any workload.* claim.
+func isMissingRecord(v asp.Verdict) bool {
+	for _, c := range v.Claims {
+		if c.Key == string(vetasp.ID)+".collected" && c.Value == "false" {
+			return true
+		}
+	}
+	return false
+}
+
+// failuresFromVerdict reconstructs the bulleted failure list the CLI prints from
+// the structured failure claims the appraiser emitted (not by splitting Reason).
+func failuresFromVerdict(v asp.Verdict) []string {
+	var out []string
+	for _, c := range v.Claims {
+		if c.Key == vetasp.ClaimFailure {
+			out = append(out, c.Value)
+		}
+	}
+	return out
+}
+
+// gateResultFromAttrs is the single chokepoint mapping lowered Cedar attributes
+// back to the store.GateResult contract. Absent workload.* attributes (the
+// CollectFailed / missing-record case) default to zero/false, exactly
+// reproducing the prior fail-closed result.
+func gateResultFromAttrs(artifactRef string, attrs map[string]lower.Attr, policyMet bool) *store.GateResult {
+	return &store.GateResult{
+		Artifact:     artifactRef,
+		ArtifactHash: attrs[vetasp.ClaimArtifactHash].Value,
+		SLSALevel:    attrInt(attrs, vetasp.ClaimSLSALevel),
+		SBOMPresent:  attrBool(attrs, vetasp.ClaimSBOMPresent),
+		CVECritical:  attrBool(attrs, vetasp.ClaimCVECritical),
+		CVEHigh:      attrBool(attrs, vetasp.ClaimCVEHigh),
+		Signed:       attrBool(attrs, vetasp.ClaimSigned),
+		PolicyMet:    policyMet,
+		EvaluatedAt:  time.Now(),
+	}
+}
+
+func attrBool(attrs map[string]lower.Attr, key string) bool {
+	return attrs[key].Value == "true"
+}
+
+func attrInt(attrs map[string]lower.Attr, key string) int {
+	n, _ := strconv.Atoi(attrs[key].Value)
+	return n
 }

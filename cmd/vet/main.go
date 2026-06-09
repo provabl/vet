@@ -114,9 +114,9 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runVerify(args[0], vetDir, verify.Options{
-				Source:        source,
-				MinSLSALevel:  minSLSA,
-				CheckCVEs:     checkCVEs,
+				Source:         source,
+				MinSLSALevel:   minSLSA,
+				CheckCVEs:      checkCVEs,
 				SigningIDRegex: signingID,
 			})
 		},
@@ -253,7 +253,7 @@ attest Cedar policy example:
 Run 'vet verify' before 'vet gate' to populate the verification record.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGate(args[0], vetDir, policyPath)
+			return runGate(cmd.Context(), args[0], vetDir, policyPath)
 		},
 	}
 	cmd.Flags().StringVar(&policyPath, "policy", ".vet/policy.yaml", "policy file path")
@@ -261,7 +261,7 @@ Run 'vet verify' before 'vet gate' to populate the verification record.`,
 	return cmd
 }
 
-func runGate(artifactRef, vetDir, policyPath string) error {
+func runGate(ctx context.Context, artifactRef, vetDir, policyPath string) error {
 	p, err := gate.LoadPolicy(policyPath)
 	if err != nil {
 		return fmt.Errorf("load policy: %w", err)
@@ -270,7 +270,7 @@ func runGate(artifactRef, vetDir, policyPath string) error {
 	s := store.New(vetDir)
 	e := gate.New(s, p)
 
-	result, err := e.Evaluate(artifactRef)
+	result, err := e.Evaluate(ctx, artifactRef)
 	if err != nil {
 		return err
 	}

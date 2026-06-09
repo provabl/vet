@@ -4,6 +4,7 @@
 package gate_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestGateWritesCedarAttributes(t *testing.T) {
 	})
 
 	e := gate.New(s, gate.DefaultPolicy())
-	result, err := e.Evaluate("ghcr.io/test/app:v1.0")
+	result, err := e.Evaluate(context.Background(), "ghcr.io/test/app:v1.0")
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestGatePolicyViolationMinSLSA(t *testing.T) {
 
 	p := &gate.Policy{MinSLSALevel: 2}
 	e := gate.New(s, p)
-	result, err := e.Evaluate("image:v1")
+	result, err := e.Evaluate(context.Background(), "image:v1")
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestGatePolicyViolationMinSLSA(t *testing.T) {
 func TestGateNoRecordWritesFailClosedResult(t *testing.T) {
 	s := store.New(t.TempDir())
 	e := gate.New(s, gate.DefaultPolicy())
-	result, err := e.Evaluate("no-record:latest")
+	result, err := e.Evaluate(context.Background(), "no-record:latest")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,11 +102,42 @@ func TestGateCVEPolicyViolation(t *testing.T) {
 
 	p := &gate.Policy{CVEThreshold: "critical"}
 	e := gate.New(s, p)
-	result, err := e.Evaluate("image:v1")
+	result, err := e.Evaluate(context.Background(), "image:v1")
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	if result.PolicyMet {
 		t.Error("policy should NOT be met when critical CVEs found")
+	}
+}
+
+// A high (but not critical) CVE must fail under the "high" threshold and pass
+// under "critical" — the threshold semantics now enforced by the evidence
+// appraiser, exercised end-to-end through gate.Evaluate.
+func TestGateHighThresholdViaKernel(t *testing.T) {
+	s := store.New(t.TempDir())
+	seedRecord(t, s, &store.VerificationRecord{
+		ArtifactRef: "image:v1",
+		Signed:      true,
+		CVEHigh:     true,
+		CVECritical: false,
+	})
+
+	high := gate.New(s, &gate.Policy{CVEThreshold: "high"})
+	rHigh, err := high.Evaluate(context.Background(), "image:v1")
+	if err != nil {
+		t.Fatalf("Evaluate (high): %v", err)
+	}
+	if rHigh.PolicyMet {
+		t.Error("policy should NOT be met: high CVE under high threshold")
+	}
+
+	crit := gate.New(s, &gate.Policy{CVEThreshold: "critical"})
+	rCrit, err := crit.Evaluate(context.Background(), "image:v1")
+	if err != nil {
+		t.Fatalf("Evaluate (critical): %v", err)
+	}
+	if !rCrit.PolicyMet {
+		t.Errorf("policy should be met: high CVE under critical threshold, failures: %v", rCrit.Failures)
 	}
 }
