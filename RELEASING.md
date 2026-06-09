@@ -47,11 +47,14 @@ git push origin vX.Y.Z
 
 ### Verify SLSA L3 provenance with `slsa-verifier`
 
+The generic generator publishes **one** provenance file, `multiple.intoto.jsonl`, that attests all
+the release binaries together (not one `.intoto.jsonl` per binary).
+
 ```bash
 # Install: go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
 slsa-verifier verify-artifact \
   vet-vX.Y.Z-linux-amd64 \
-  --provenance-path vet-vX.Y.Z-linux-amd64.intoto.jsonl \
+  --provenance-path multiple.intoto.jsonl \
   --source-uri github.com/provabl/vet \
   --source-tag vX.Y.Z
 # → PASSED: SLSA verification passed
@@ -59,13 +62,18 @@ slsa-verifier verify-artifact \
 
 `slsa-verifier` confirms the provenance was produced by the trusted
 slsa-github-generator builder (the L3 builder identity), that the artifact hash
-matches, and that the source repo/tag are as expected.
+matches, and that the source repo/tag are as expected. Verified on v0.2.0:
 
-You can also inspect the provenance with `gh`:
-
-```bash
-gh attestation verify vet-vX.Y.Z-linux-amd64 --repo provabl/vet
 ```
+Verified build using builder ".../generator_generic_slsa3.yml@refs/tags/v2.1.0" at commit <sha>
+Verifying artifact vet-v0.2.0-darwin-arm64: PASSED
+PASSED: SLSA verification passed
+```
+
+> **Not `gh attestation verify`.** The generic generator uploads provenance as a **release asset**
+> (`multiple.intoto.jsonl`), not to GitHub's attestations API — so `gh attestation verify … --repo
+> provabl/vet` returns HTTP 404. `slsa-verifier verify-artifact` (above) is the correct consumer
+> check.
 
 ### Verify the cosign signature
 

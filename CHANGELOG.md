@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Changed
+
+- **CI/release actions bumped to Node-24 runtimes**: `actions/checkout@v4→v6`,
+  `actions/setup-go@v5→v6`, `softprops/action-gh-release@v2→v3` — clears the GitHub Node-20
+  deprecation warnings for the actions we control. (Warnings from the slsa-github-generator's
+  internal actions are upstream and clear when it ships past v2.1.0.)
+
+### Fixed
+
+- **`RELEASING.md` verification steps**: the provenance file is `multiple.intoto.jsonl` (one file
+  for all binaries), not a per-binary `.intoto.jsonl`; and `gh attestation verify` does not work
+  for the generic generator's release-asset provenance (404) — `slsa-verifier verify-artifact` is
+  the correct consumer check. Verified against the v0.2.0 release.
+
 ## [0.2.0] - 2026-06-09
 
 ### Added
