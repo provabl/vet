@@ -8,10 +8,12 @@ package verify
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -35,9 +37,9 @@ func (r *defaultRunner) Run(ctx context.Context, name string, args ...string) ([
 
 // Options controls what vet verify checks.
 type Options struct {
-	Source        string // github.com/org/repo — required for SLSA check
-	MinSLSALevel  int    // 0 = any/none, 1/2/3 = minimum
-	CheckCVEs     string // "critical", "high", "medium", "" = skip
+	Source         string // github.com/org/repo — required for SLSA check
+	MinSLSALevel   int    // 0 = any/none, 1/2/3 = minimum
+	CheckCVEs      string // "critical", "high", "medium", "" = skip
 	SigningIDRegex string // certificate-identity-regexp for cosign verify
 }
 
@@ -64,16 +66,17 @@ func NewWithRunner(r Runner, s *store.Store) *Verifier {
 
 // VerifyResult summarises all verification checks.
 type VerifyResult struct {
-	ArtifactRef  string
-	Signed       bool
+	ArtifactRef   string
+	ArtifactHash  string // sha256:… digest when derivable from the ref or a local file
+	Signed        bool
 	SignerSubject string
-	RekorLogID   string
-	SLSALevel    int // 0 = not present/verified
-	SBOMPresent  bool
-	CVECritical  bool
-	CVEHigh      bool
-	PolicyMet    bool
-	Failures     []string // human-readable failure list
+	RekorLogID    string
+	SLSALevel     int // 0 = not present/verified
+	SBOMPresent   bool
+	CVECritical   bool
+	CVEHigh       bool
+	PolicyMet     bool
+	Failures      []string // human-readable failure list
 }
 
 // Verify runs all configured checks and returns a result.
@@ -106,7 +109,11 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 		}
 	}
 
-	// 3. CVE check (requires SBOM in store)
+	// 3. SBOM presence + artifact hash (independent of the CVE check).
+	result.SBOMPresent = v.store.HasSBOM(artifactRef)
+	result.ArtifactHash = artifactHash(artifactRef)
+
+	// 4. CVE check (requires SBOM in store)
 	if opts.CheckCVEs != "" {
 		sbomPath := v.store.SBOMPath(artifactRef, "spdx")
 		critical, high, cveErr := v.checkCVEs(ctx, sbomPath)
@@ -117,7 +124,7 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 		// CVE check failure is non-blocking (SBOM may not exist yet)
 	}
 
-	// 4. Policy evaluation
+	// 5. Policy evaluation
 	var policyFailures []string
 	if !result.Signed {
 		policyFailures = append(policyFailures, "artifact is not signed")
@@ -142,19 +149,45 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 
 	// Persist record.
 	rec := &store.VerificationRecord{
-		ArtifactRef:  artifactRef,
-		Signed:       result.Signed,
+		ArtifactRef:   artifactRef,
+		ArtifactHash:  result.ArtifactHash,
+		Signed:        result.Signed,
 		SignerSubject: result.SignerSubject,
-		RekorLogID:   result.RekorLogID,
-		SLSALevel:    result.SLSALevel,
-		CVECritical:  result.CVECritical,
-		CVEHigh:      result.CVEHigh,
-		VerifiedAt:   time.Now(),
-		Source:       opts.Source,
+		RekorLogID:    result.RekorLogID,
+		SLSALevel:     result.SLSALevel,
+		SBOMPresent:   result.SBOMPresent,
+		CVECritical:   result.CVECritical,
+		CVEHigh:       result.CVEHigh,
+		VerifiedAt:    time.Now(),
+		Source:        opts.Source,
 	}
 	_ = v.store.SaveRecord(rec) // non-fatal
 
 	return result, nil
+}
+
+// artifactHash derives the subject digest for an artifact reference. For an image
+// ref pinned by digest (…@sha256:abc…) it returns that digest. For a local file
+// (./path or /path) it returns the sha256 of the file contents. For a bare tag
+// (no digest, not a local file) it returns "" — the digest cannot be known
+// without pulling the image, and an empty hash is honest rather than fabricated.
+func artifactHash(ref string) string {
+	if i := strings.Index(ref, "@sha256:"); i != -1 {
+		return ref[i+1:] // "sha256:abc…"
+	}
+	if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "/") {
+		f, err := os.Open(ref) // #nosec G304 — operator-supplied artifact path
+		if err != nil {
+			return ""
+		}
+		defer func() { _ = f.Close() }()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return ""
+		}
+		return fmt.Sprintf("sha256:%x", h.Sum(nil))
+	}
+	return ""
 }
 
 // verifySig calls cosign to verify the artifact's signature.
