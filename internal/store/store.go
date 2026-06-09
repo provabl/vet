@@ -23,8 +23,8 @@ type VerificationRecord struct {
 	ArtifactHash  string    `json:"artifact_hash"`
 	Signed        bool      `json:"signed"`
 	SignerSubject string    `json:"signer_subject,omitempty"`
-	RekorLogID   string    `json:"rekor_log_id,omitempty"`
-	SLSALevel     int       `json:"slsa_level"`    // 0 = not verified
+	RekorLogID    string    `json:"rekor_log_id,omitempty"`
+	SLSALevel     int       `json:"slsa_level"` // 0 = not verified
 	SBOMPresent   bool      `json:"sbom_present"`
 	CVECritical   bool      `json:"cve_critical"`
 	CVEHigh       bool      `json:"cve_high"`
@@ -48,8 +48,8 @@ type GateResult struct {
 
 // Policy is read from .vet/policy.yaml.
 type Policy struct {
-	MinSLSALevel int      `yaml:"min_slsa_level"` // default 0 (no requirement)
-	CVEThreshold string   `yaml:"cve_threshold"`  // "critical", "high", "medium", ""
+	MinSLSALevel      int      `yaml:"min_slsa_level"` // default 0 (no requirement)
+	CVEThreshold      string   `yaml:"cve_threshold"`  // "critical", "high", "medium", ""
 	AllowedSigningIDs []string `yaml:"allowed_signing_ids,omitempty"`
 }
 
@@ -128,6 +128,17 @@ func (s *Store) SBOMPath(artifactRef, format string) string {
 		ext = ".cyclonedx.json"
 	}
 	return filepath.Join(s.dir, "sboms", key+ext)
+}
+
+// HasSBOM reports whether an SBOM has been generated for the artifact, in either
+// SPDX or CycloneDX format. Used to populate VerificationRecord.SBOMPresent.
+func (s *Store) HasSBOM(artifactRef string) bool {
+	for _, format := range []string{"spdx", "cyclonedx"} {
+		if _, err := os.Stat(s.SBOMPath(artifactRef, format)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Dir returns the root .vet/ directory path.
