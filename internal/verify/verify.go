@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,17 +68,18 @@ func NewWithRunner(r Runner, s *store.Store) *Verifier {
 
 // VerifyResult summarises all verification checks.
 type VerifyResult struct {
-	ArtifactRef   string
-	ArtifactHash  string // sha256:… digest when derivable from the ref or a local file
-	Signed        bool
-	SignerSubject string
-	RekorLogID    string
-	SLSALevel     int // 0 = not present/verified
-	SBOMPresent   bool
-	CVECritical   bool
-	CVEHigh       bool
-	PolicyMet     bool
-	Failures      []string // human-readable failure list
+	ArtifactRef     string
+	ArtifactHash    string // sha256:… digest when derivable from the ref or a local file
+	Signed          bool
+	SignerSubject   string
+	RekorLogID      string
+	SLSALevel       int  // 0 = not present/verified
+	SLSAToolMissing bool // gh CLI absent — SLSA could not be checked (distinct from level 0)
+	SBOMPresent     bool
+	CVECritical     bool
+	CVEHigh         bool
+	PolicyMet       bool
+	Failures        []string // human-readable failure list
 }
 
 // Verify runs all configured checks and returns a result.
@@ -99,13 +101,23 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 		result.RekorLogID = rekorID
 	}
 
-	// 2. SLSA provenance (requires gh CLI and --source)
+	// 2. SLSA provenance (requires the gh CLI and --source). A missing gh is
+	// surfaced distinctly from "no provenance" so the operator isn't left
+	// guessing why the level is 0 — and, when a --min-slsa-level gate is set, it
+	// fails closed below rather than silently reporting level 0.
 	if opts.Source != "" {
 		level, slsaErr := v.verifySLSA(ctx, artifactRef, opts.Source)
-		if slsaErr != nil {
+		switch {
+		case errors.Is(slsaErr, errGHMissing):
+			result.SLSAToolMissing = true
+			if opts.MinSLSALevel > 0 {
+				result.Failures = append(result.Failures,
+					fmt.Sprintf("SLSA level %d required but cannot verify: %v", opts.MinSLSALevel, slsaErr))
+			}
+		case slsaErr != nil:
 			result.Failures = append(result.Failures,
 				fmt.Sprintf("SLSA provenance check failed: %v", slsaErr))
-		} else {
+		default:
 			result.SLSALevel = level
 		}
 	}
@@ -243,17 +255,37 @@ func (v *Verifier) verifySig(ctx context.Context, ref, signingIDRegex string) (s
 	return true, subject, rekorID, nil
 }
 
-// verifySLSA calls `gh attestation verify` to check SLSA provenance level.
+// errGHMissing signals that the `gh` CLI is not installed, distinct from gh
+// running and finding no/invalid attestation. The caller surfaces this so a
+// requested SLSA check that cannot run is not silently reported as "level 0".
+var errGHMissing = errors.New("gh CLI not found — install from https://cli.github.com to verify SLSA provenance")
+
+// verifySLSA calls `gh attestation verify` to check SLSA provenance and returns
+// the derived build level (0 = unverified). It returns errGHMissing when gh is
+// absent (so the caller can warn distinctly) and a nil error with level 0 when
+// gh ran but found no valid provenance.
 func (v *Verifier) verifySLSA(ctx context.Context, ref, source string) (int, error) {
+	if !toolAvailable(ctx, v.runner, "gh") {
+		return 0, errGHMissing
+	}
 	out, err := v.runner.Run(ctx, "gh", "attestation", "verify",
 		ref, "--repo", source, "--format", "json")
 	if err != nil {
-		// gh not installed or no attestation — return level 0 (not verified)
+		// gh ran but verification failed / no attestation — genuinely level 0.
 		return 0, nil
 	}
+	return slsaLevelFromGH(out), nil
+}
 
-	// Parse gh output to determine SLSA level.
-	return extractSLSALevel(string(out)), nil
+// toolAvailable reports whether an external CLI is invokable, so missing-tool can
+// be distinguished from tool-ran-and-failed.
+func toolAvailable(ctx context.Context, r Runner, name string) bool {
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+	// Fall back to asking the runner (covers injected test runners): `--version`.
+	_, err := r.Run(ctx, name, "--version")
+	return err == nil
 }
 
 // maxCVEPackages bounds how many SBOM packages a single verify will query against
@@ -308,7 +340,6 @@ func pkgIdent(p sbom.Package) string {
 
 var signerSubjectRe = regexp.MustCompile(`"subject":\s*"([^"]+)"`)
 var rekorIDRe = regexp.MustCompile(`(?i)log\s*id[:\s]+([a-f0-9]{64})`)
-var slsaLevelRe = regexp.MustCompile(`(?i)slsa[^"]*level["\s:]+(\d)`)
 
 func extractSignerSubject(output string) string {
 	if m := signerSubjectRe.FindStringSubmatch(output); len(m) > 1 {
@@ -324,23 +355,58 @@ func extractRekorIDFromOutput(output string) string {
 	return ""
 }
 
-func extractSLSALevel(ghOutput string) int {
-	if m := slsaLevelRe.FindStringSubmatch(ghOutput); len(m) > 1 {
-		switch m[1] {
-		case "3":
-			return 3
-		case "2":
-			return 2
-		case "1":
-			return 1
+// slsaProvenanceV1 is the predicate type gh attestation verify enforces for
+// build provenance by default.
+const slsaProvenanceV1 = "https://slsa.dev/provenance/v1"
+
+// slsaLevelFromGH derives the SLSA build level from `gh attestation verify
+// --format json` output. There is no explicit "level" field in the output — gh
+// returns an array of verified attestations, each with a statement carrying a
+// predicateType and a provenance predicate. We derive the level structurally:
+//
+//   - A verified slsa.dev/provenance/v1 attestation means the build ran on a
+//     trusted builder → SLSA Build Level 2.
+//   - If the provenance's builder id is a reusable workflow run by the SLSA
+//     GitHub generator (the hardened, isolated builder), that is Level 3.
+//
+// This replaces an earlier regex that matched a non-existent "slsa level" field
+// and always fell back to a hardcoded 2. Returns 0 when no verified v1
+// provenance attestation is present.
+func slsaLevelFromGH(out []byte) int {
+	var entries []struct {
+		VerificationResult struct {
+			Statement struct {
+				PredicateType string `json:"predicateType"`
+				Predicate     struct {
+					RunDetails struct {
+						Builder struct {
+							ID string `json:"id"`
+						} `json:"builder"`
+					} `json:"runDetails"`
+				} `json:"predicate"`
+			} `json:"statement"`
+		} `json:"verificationResult"`
+	}
+	if err := json.Unmarshal(out, &entries); err != nil {
+		return 0
+	}
+	level := 0
+	for _, e := range entries {
+		st := e.VerificationResult.Statement
+		if st.PredicateType != slsaProvenanceV1 {
+			continue
+		}
+		// A verified v1 provenance attestation is at least Level 2.
+		if level < 2 {
+			level = 2
+		}
+		// The SLSA GitHub generator (slsa-framework/slsa-github-generator) runs the
+		// build in an isolated reusable workflow — Build Level 3.
+		if strings.Contains(st.Predicate.RunDetails.Builder.ID, "slsa-framework/slsa-github-generator") {
+			level = 3
 		}
 	}
-	// gh attestation verify success without explicit level = at least L2
-	// (GitHub's attest-build-provenance generates SLSA L2+ attestations)
-	if strings.Contains(strings.ToLower(ghOutput), "verified") {
-		return 2
-	}
-	return 0
+	return level
 }
 
 // osvQueryURL is the OSV single-package query endpoint. Unlike /v1/querybatch

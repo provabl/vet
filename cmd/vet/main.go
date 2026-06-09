@@ -103,7 +103,16 @@ func verifyCmd() *cobra.Command {
 		Use:   "verify <artifact>",
 		Short: "Verify SLSA provenance and CVE status of an artifact",
 		Long: `Verify a container image or binary against configured policy.
-Checks: cosign signature, SLSA provenance (via gh CLI), CVE status (via OSV API).
+Checks: cosign signature, SLSA provenance, CVE status.
+
+Required external tools (per check):
+  --source         the GitHub CLI 'gh' (SLSA provenance via 'gh attestation verify')
+  signature        cosign
+  --check-cves     a stored SBOM ('vet sbom <artifact>'); CVEs are queried from OSV
+
+If a requested check's tool or input is missing, verify fails closed (it does not
+silently pass): a missing 'gh' with --min-slsa-level, or --check-cves with no SBOM,
+is reported as a policy violation rather than assumed clean.
 
 Exit codes: 0 = verified, 1 = policy violation, 2 = error
 
@@ -151,9 +160,12 @@ func runVerify(artifactRef, vetDir string, opts verify.Options) error {
 	}
 
 	if opts.Source != "" {
-		if result.SLSALevel > 0 {
+		switch {
+		case result.SLSAToolMissing:
+			fmt.Println("  ✗ SLSA provenance not checked — gh CLI not installed (https://cli.github.com)")
+		case result.SLSALevel > 0:
 			fmt.Printf("  ✓ SLSA Level %d provenance verified\n", result.SLSALevel)
-		} else {
+		default:
 			fmt.Println("  ✗ SLSA provenance not found or unverified")
 		}
 	}
