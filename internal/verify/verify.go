@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/provabl/vet/internal/sbom"
 	"github.com/provabl/vet/internal/store"
 )
 
@@ -109,19 +110,23 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 		}
 	}
 
-	// 3. SBOM presence + artifact hash (independent of the CVE check).
-	result.SBOMPresent = v.store.HasSBOM(artifactRef)
+	// 3. SBOM presence + artifact hash (independent of the CVE check). "Present"
+	// means a valid SBOM with at least one package — not merely a file on disk.
+	result.SBOMPresent = v.sbomPackages(artifactRef) != nil
 	result.ArtifactHash = artifactHash(artifactRef)
 
-	// 4. CVE check (requires SBOM in store)
+	// 4. CVE check. Fail-closed: if the operator asked for a CVE gate but it
+	// cannot be evaluated (no SBOM, unparseable, OSV unreachable), that is a
+	// policy failure — never a silent pass.
+	var cveErr error
 	if opts.CheckCVEs != "" {
-		sbomPath := v.store.SBOMPath(artifactRef, "spdx")
-		critical, high, cveErr := v.checkCVEs(ctx, sbomPath)
-		if cveErr == nil {
+		critical, high, ran, err := v.checkCVEs(ctx, artifactRef)
+		if ran {
 			result.CVECritical = critical
 			result.CVEHigh = high
+		} else {
+			cveErr = err // surfaced as a fail-closed policy failure below
 		}
-		// CVE check failure is non-blocking (SBOM may not exist yet)
 	}
 
 	// 5. Policy evaluation
@@ -132,6 +137,11 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 	if opts.MinSLSALevel > 0 && result.SLSALevel < opts.MinSLSALevel {
 		policyFailures = append(policyFailures,
 			fmt.Sprintf("SLSA level %d < minimum %d", result.SLSALevel, opts.MinSLSALevel))
+	}
+	if opts.CheckCVEs != "" && cveErr != nil {
+		// Fail closed: a requested CVE gate that could not run denies the artifact.
+		policyFailures = append(policyFailures,
+			fmt.Sprintf("CVE check requested but could not run: %v", cveErr))
 	}
 	switch opts.CheckCVEs {
 	case "critical":
@@ -246,14 +256,52 @@ func (v *Verifier) verifySLSA(ctx context.Context, ref, source string) (int, err
 	return extractSLSALevel(string(out)), nil
 }
 
-// checkCVEs queries the OSV API with packages extracted from an SBOM.
-func (v *Verifier) checkCVEs(_ context.Context, sbomPath string) (critical, high bool, err error) {
-	// Simplified: return false if SBOM not found. Full implementation reads SBOM
-	// packages and queries https://api.osv.dev/v1/querybatch.
-	if sbomPath == "" {
-		return false, false, fmt.Errorf("no SBOM path provided")
+// maxCVEPackages bounds how many SBOM packages a single verify will query against
+// OSV, so a pathologically large SBOM cannot wedge a run. If an SBOM exceeds it,
+// the check still runs over the first maxCVEPackages packages.
+const maxCVEPackages = 500
+
+// sbomPackages loads the parsed package list for an artifact, trying SPDX then
+// CycloneDX. Returns nil when no parseable, non-empty SBOM exists.
+func (v *Verifier) sbomPackages(artifactRef string) []sbom.Package {
+	for _, format := range []string{"spdx", "cyclonedx"} {
+		if pkgs, err := sbom.Load(v.store.SBOMPath(artifactRef, format)); err == nil && len(pkgs) > 0 {
+			return pkgs
+		}
 	}
-	return false, false, nil // non-fatal — CVE check deferred until SBOM present
+	return nil
+}
+
+// checkCVEs parses the artifact's SBOM and queries OSV for each package. The ran
+// return reports whether the check actually executed: when it is false the caller
+// must fail closed (a requested CVE gate that could not be evaluated must not pass).
+func (v *Verifier) checkCVEs(ctx context.Context, artifactRef string) (critical, high, ran bool, err error) {
+	pkgs := v.sbomPackages(artifactRef)
+	if pkgs == nil {
+		return false, false, false, fmt.Errorf("no SBOM present — run 'vet sbom %s' first", artifactRef)
+	}
+	if len(pkgs) > maxCVEPackages {
+		pkgs = pkgs[:maxCVEPackages]
+	}
+	var queried bool
+	for _, p := range pkgs {
+		c, h, qErr := queryOSV(ctx, v.http, p)
+		if qErr != nil {
+			// OSV unreachable mid-run: fail closed rather than under-report.
+			return false, false, false, fmt.Errorf("OSV query failed for %s: %w", pkgIdent(p), qErr)
+		}
+		queried = true
+		critical = critical || c
+		high = high || h
+	}
+	return critical, high, queried, nil
+}
+
+func pkgIdent(p sbom.Package) string {
+	if p.PURL != "" {
+		return p.PURL
+	}
+	return p.Name + "@" + p.Version
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -295,12 +343,29 @@ func extractSLSALevel(ghOutput string) int {
 	return 0
 }
 
-// QueryOSV queries the OSV API for vulnerabilities matching a package.
-// Used by checkCVEs when SBOM parsing is implemented.
-func QueryOSV(ctx context.Context, client *http.Client, packageName, ecosystem string) (critical, high bool, err error) {
-	body := fmt.Sprintf(`{"package":{"name":%q,"ecosystem":%q}}`, packageName, ecosystem)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.osv.dev/v1/query", bytes.NewBufferString(body))
+// osvQueryURL is the OSV single-package query endpoint. Unlike /v1/querybatch
+// (which returns only vuln IDs), /v1/query returns full vuln records including
+// severity inline, so a single call per package yields the CRITICAL/HIGH verdict.
+const osvQueryURL = "https://api.osv.dev/v1/query"
+
+// queryOSV asks OSV whether a single package has known critical/high
+// vulnerabilities. It queries by PURL when available (PURL encodes the
+// ecosystem), else by name+ecosystem. A malformed/empty response is treated as
+// "no known vulns"; a transport error is returned so the caller can fail closed.
+func queryOSV(ctx context.Context, client *http.Client, p sbom.Package) (critical, high bool, err error) {
+	var body string
+	switch {
+	case p.PURL != "":
+		body = fmt.Sprintf(`{"package":{"purl":%q}}`, p.PURL)
+	case p.Ecosystem != "":
+		body = fmt.Sprintf(`{"package":{"name":%q,"ecosystem":%q}}`, p.Name, p.Ecosystem)
+	default:
+		// Without a purl or ecosystem OSV cannot resolve the package; skip it
+		// rather than error (a bare name is ambiguous across ecosystems).
+		return false, false, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, osvQueryURL, bytes.NewBufferString(body))
 	if err != nil {
 		return false, false, err
 	}
@@ -309,8 +374,11 @@ func QueryOSV(ctx context.Context, client *http.Client, packageName, ecosystem s
 	if err != nil {
 		return false, false, err
 	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, false, fmt.Errorf("OSV returned status %d", resp.StatusCode)
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	var result struct {
 		Vulns []struct {
@@ -318,17 +386,30 @@ func QueryOSV(ctx context.Context, client *http.Client, packageName, ecosystem s
 				Type  string `json:"type"`
 				Score string `json:"score"`
 			} `json:"severity"`
+			DatabaseSpecific struct {
+				Severity string `json:"severity"`
+			} `json:"database_specific"`
 		} `json:"vulns"`
 	}
 	if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
 		return false, false, nil
 	}
-	for _, v := range result.Vulns {
-		for _, s := range v.Severity {
-			if strings.Contains(s.Score, "CRITICAL") || strings.Contains(s.Type, "CRITICAL") {
+	for _, vuln := range result.Vulns {
+		// Some feeds carry a categorical severity (GHSA: "CRITICAL"/"HIGH"); CVSS
+		// feeds carry a vector score in Score. Check both.
+		sev := strings.ToUpper(vuln.DatabaseSpecific.Severity)
+		if sev == "CRITICAL" {
+			critical = true
+		}
+		if sev == "HIGH" {
+			high = true
+		}
+		for _, s := range vuln.Severity {
+			up := strings.ToUpper(s.Score + " " + s.Type)
+			if strings.Contains(up, "CRITICAL") {
 				critical = true
 			}
-			if strings.Contains(s.Score, "HIGH") || strings.Contains(s.Type, "HIGH") {
+			if strings.Contains(up, "HIGH") {
 				high = true
 			}
 		}
