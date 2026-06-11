@@ -13,6 +13,7 @@ import (
 
 	"github.com/provabl/vet/internal/amitag"
 	"github.com/provabl/vet/internal/gate"
+	"github.com/provabl/vet/internal/preflight"
 	"github.com/provabl/vet/internal/sbom"
 	"github.com/provabl/vet/internal/sign"
 	"github.com/provabl/vet/internal/store"
@@ -41,8 +42,48 @@ Where qualify qualifies the person, vet qualifies the software.
   vet gate    image:tag            # write Cedar workload attributes for attest`,
 		Version: version,
 	}
-	cmd.AddCommand(signCmd(), verifyCmd(), sbomCmd(), gateCmd())
+	cmd.AddCommand(signCmd(), verifyCmd(), sbomCmd(), gateCmd(), preflightCmd())
 	return cmd
+}
+
+// preflightCmd verifies the calling principal holds the IAM actions vet needs.
+func preflightCmd() *cobra.Command {
+	var region string
+	cmd := &cobra.Command{
+		Use:   "preflight",
+		Short: "Verify the calling principal holds the IAM permissions vet needs",
+		Long: `Check that the calling AWS principal can perform vet's AWS-touching actions
+(the AMI vetter's ec2:CreateTags), via read-only iam:SimulatePrincipalPolicy
+against the caller — it evaluates, it does not act. A denied action prints a
+remediation and the command exits non-zero. See docs/required-permissions.md.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runPreflight(preflight.CheckCallerPermissions(cmd.Context(), region))
+		},
+	}
+	cmd.Flags().StringVar(&region, "region", "us-east-1", "AWS region")
+	return cmd
+}
+
+// runPreflight renders preflight results and returns a non-nil error if any failed.
+func runPreflight(results []preflight.Result) error {
+	failures := 0
+	for _, r := range results {
+		if r.Status {
+			fmt.Printf("  ✓ %s\n", r.Name)
+			continue
+		}
+		failures++
+		fmt.Printf("  ✗ %s: %s\n", r.Name, r.Detail)
+		if r.Remediation != "" {
+			fmt.Printf("      Remediation: %s\n", r.Remediation)
+		}
+	}
+	fmt.Println()
+	if failures > 0 {
+		return fmt.Errorf("preflight failed: %d required permission(s) missing", failures)
+	}
+	fmt.Println("✓ All required permissions present")
+	return nil
 }
 
 // ── sign ──────────────────────────────────────────────────────────────────────
