@@ -78,14 +78,16 @@ tpm attest --device            # (or: nitro attest --device, for an enclave)
 vet ami-reference ami-0abc123 --pcr 0=<hex> --pcr 7=<hex> --region us-east-1
 # → writes attest:pcr0=<hex>, attest:pcr7=<hex>
 
-# 4. at launch, enforce the match (until auto-loading lands, pass the tag value):
-tpm attest --device --expected-pcr0 <hex> --expected-pcr7 <hex>
+# 4. at launch, on the instance, enforce the match — auto-loads the golden tags from the source AMI:
+tpm attest --device --expected-from-ami        # (or: nitro attest --device --expected-from-ami)
+#   reads this instance's source-AMI id from IMDS, pulls its attest:pcr* tags, and requires the match;
+#   a measured boot that diverges from the vetted reference fails attestation.
+#   (--expected-pcrN still works for a manual override.)
 ```
 
 The `attest:pcr*` tags are locked to the vetter principal by ground's lockdown SCP (a forgeable
 golden PCR would defeat the binding). **Trust boundary:** the binding is only as strong as (a) the
 *reference boot* being genuinely known-good and (b) the golden tags staying locked to the vetter.
-Auto-loading the golden PCR from the AMI tag into `attest` is deferred (provabl#13).
 
 ## Status
 
