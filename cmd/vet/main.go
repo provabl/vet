@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/provabl/vet/internal/amitag"
 	"github.com/provabl/vet/internal/gate"
 	"github.com/provabl/vet/internal/sbom"
 	"github.com/provabl/vet/internal/sign"
@@ -250,6 +251,8 @@ func runSBOM(artifactRef, vetDir, format string, attest bool) error {
 func gateCmd() *cobra.Command {
 	var policyPath string
 	var vetDir string
+	var tagVetted bool
+	var region string
 
 	cmd := &cobra.Command{
 		Use:   "gate <artifact>",
@@ -266,18 +269,44 @@ attest Cedar policy example:
     && context.workload.CVECritical == false
   };
 
-Run 'vet verify' before 'vet gate' to populate the verification record.`,
+Run 'vet verify' before 'vet gate' to populate the verification record.
+
+For an AWS AMI target (ami-...), --tag-vetted additionally writes the
+attest:vetted=true tag to the AMI when the gate passes. That tag is what
+ground's AMI-launch-gating SCP requires to permit ec2:RunInstances; a companion
+lockdown SCP restricts who may set it, so the principal running this must be the
+designated vetter (vet's CI). On a failing gate, no tag is written (fail-closed).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runGate(cmd.Context(), args[0], vetDir, policyPath)
+			var tagger amitag.Tagger
+			if tagVetted {
+				if !isAMIRef(args[0]) {
+					return fmt.Errorf("--tag-vetted applies only to an AMI target (ami-...), got %q", args[0])
+				}
+				t, err := amitag.New(cmd.Context(), region)
+				if err != nil {
+					return err
+				}
+				tagger = t
+			}
+			return runGate(cmd.Context(), args[0], vetDir, policyPath, tagger)
 		},
 	}
 	cmd.Flags().StringVar(&policyPath, "policy", ".vet/policy.yaml", "policy file path")
 	cmd.Flags().StringVar(&vetDir, "vet-dir", ".vet", ".vet directory path")
+	cmd.Flags().BoolVar(&tagVetted, "tag-vetted", false, "for an ami-... target: write attest:vetted=true to the AMI when the gate passes")
+	cmd.Flags().StringVar(&region, "region", "us-east-1", "AWS region for the EC2 tag write (with --tag-vetted)")
 	return cmd
 }
 
-func runGate(ctx context.Context, artifactRef, vetDir, policyPath string) error {
+// isAMIRef reports whether ref is an AWS AMI id (ami-...).
+func isAMIRef(ref string) bool {
+	return strings.HasPrefix(ref, "ami-")
+}
+
+// runGate evaluates the artifact and, when tagger is non-nil and the gate passes
+// for an AMI target, writes the attest:vetted tag the launch-gating SCP requires.
+func runGate(ctx context.Context, artifactRef, vetDir, policyPath string, tagger amitag.Tagger) error {
 	p, err := gate.LoadPolicy(policyPath)
 	if err != nil {
 		return fmt.Errorf("load policy: %w", err)
@@ -307,6 +336,13 @@ func runGate(ctx context.Context, artifactRef, vetDir, policyPath string) error 
 
 	if result.PolicyMet {
 		fmt.Printf("✓ Policy met — Cedar attributes written to %s/gate-result.json\n", vetDir)
+		tagged, err := tagIfVetted(ctx, tagger, artifactRef, true)
+		if err != nil {
+			return err
+		}
+		if tagged {
+			fmt.Printf("✓ Tagged AMI %s: %s=true\n", artifactRef, amitag.TagVetted)
+		}
 		return nil
 	}
 
@@ -314,8 +350,23 @@ func runGate(ctx context.Context, artifactRef, vetDir, policyPath string) error 
 	for _, f := range result.Failures {
 		fmt.Printf("  • %s\n", f)
 	}
+	// Fail-closed: no attest:vetted tag is written on a failing gate.
 	os.Exit(1)
 	return nil
+}
+
+// tagIfVetted writes the attest:vetted tag to the AMI only when the gate passed
+// and a tagger is configured — the fail-closed marking step ground's launch-gating
+// SCP keys on. It is a small pure-ish seam so the pass/fail decision is unit-tested
+// without driving the os.Exit path in runGate. Returns whether a tag was written.
+func tagIfVetted(ctx context.Context, tagger amitag.Tagger, amiID string, policyMet bool) (bool, error) {
+	if tagger == nil || !policyMet {
+		return false, nil
+	}
+	if err := tagger.TagImage(ctx, amiID, map[string]string{amitag.TagVetted: "true"}); err != nil {
+		return false, fmt.Errorf("write %s tag to %s: %w", amitag.TagVetted, amiID, err)
+	}
+	return true, nil
 }
 
 // contextWithTimeout returns a background context.
