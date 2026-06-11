@@ -25,6 +25,14 @@ import (
 // pins attest:nitro-attested).
 const TagVetted = "attest:vetted"
 
+// TagPCRPrefix is the prefix for golden boot-measurement tags written to a vetted
+// AMI by `vet ami-reference` (e.g. attest:pcr0, attest:pcr7). At launch, a running
+// instance's attestation PCR is checked against the AMI's golden value to bind the
+// instance to the vetted image (provabl#13). Like attest:vetted, these keys are
+// locked to the vetter principal by ground's lockdown SCP (a forgeable golden PCR
+// would defeat the binding).
+const TagPCRPrefix = "attest:pcr"
+
 // Tagger writes tags to an AMI. Implemented by the AWS EC2 client in production;
 // mocked in tests. The id is an AMI id (ami-...).
 type Tagger interface {

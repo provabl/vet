@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -42,7 +44,7 @@ Where qualify qualifies the person, vet qualifies the software.
   vet gate    image:tag            # write Cedar workload attributes for attest`,
 		Version: version,
 	}
-	cmd.AddCommand(signCmd(), verifyCmd(), sbomCmd(), gateCmd(), preflightCmd())
+	cmd.AddCommand(signCmd(), verifyCmd(), sbomCmd(), gateCmd(), amiReferenceCmd(), preflightCmd())
 	return cmd
 }
 
@@ -408,6 +410,84 @@ func tagIfVetted(ctx context.Context, tagger amitag.Tagger, amiID string, policy
 		return false, fmt.Errorf("write %s tag to %s: %w", amitag.TagVetted, amiID, err)
 	}
 	return true, nil
+}
+
+// ── ami-reference ───────────────────────────────────────────────────────────────
+
+func amiReferenceCmd() *cobra.Command {
+	var pcrs []string
+	var region string
+
+	cmd := &cobra.Command{
+		Use:   "ami-reference <ami-id>",
+		Short: "Record golden boot-measurement (PCR) tags on a vetted AMI",
+		Long: `Record a vetted AMI's known-good boot measurements as attest:pcr<N> tags, so a
+running instance can later be bound to the vetted image (provabl#13). NitroTPM /
+enclave PCRs cannot be computed offline from an AMI — capture them from a trusted
+REFERENCE BOOT:
+
+  1. launch the vetted AMI on a trusted instance
+  2. nitro attest --device   (or tpm attest --device)
+  3. read the measured PCRs from .nitro/attestation.json / .tpm/attestation.json
+  4. vet ami-reference ami-… --pcr 0=<hex> --pcr 7=<hex>
+
+These tags are locked to the vetter principal by ground's lockdown SCP (a forgeable
+golden PCR would defeat the binding). At launch, pass the tag value to
+'nitro/tpm attest --expected-pcr<N>' to enforce the match.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			amiID := args[0]
+			if !strings.HasPrefix(amiID, "ami-") {
+				return fmt.Errorf("expected an AMI id (ami-...), got %q", amiID)
+			}
+			if len(pcrs) == 0 {
+				return fmt.Errorf("at least one --pcr <index>=<hex> is required")
+			}
+			tags, err := pcrTagsFromFlags(pcrs)
+			if err != nil {
+				return err
+			}
+			tagger, err := amitag.New(cmd.Context(), region)
+			if err != nil {
+				return err
+			}
+			if err := tagger.TagImage(cmd.Context(), amiID, tags); err != nil {
+				return fmt.Errorf("write golden-PCR tags to %s: %w", amiID, err)
+			}
+			fmt.Printf("✓ Recorded golden PCR(s) on %s:\n", amiID)
+			for k, v := range tags {
+				fmt.Printf("  %s = %s\n", k, v)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringArrayVar(&pcrs, "pcr", nil, "golden PCR as <index>=<hex> (repeatable), e.g. --pcr 0=ab12…")
+	cmd.Flags().StringVar(&region, "region", "us-east-1", "AWS region for the EC2 tag write")
+	return cmd
+}
+
+// pcrTagsFromFlags parses repeated --pcr <index>=<hex> values into attest:pcr<N>
+// tag pairs, validating the index (0–23) and that the value is hex.
+func pcrTagsFromFlags(pcrs []string) (map[string]string, error) {
+	tags := make(map[string]string, len(pcrs))
+	for _, p := range pcrs {
+		idxStr, val, ok := strings.Cut(p, "=")
+		if !ok {
+			return nil, fmt.Errorf("--pcr %q must be <index>=<hex>", p)
+		}
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil || idx < 0 || idx > 23 {
+			return nil, fmt.Errorf("--pcr index %q must be 0–23", idxStr)
+		}
+		if val == "" {
+			return nil, fmt.Errorf("--pcr %d has an empty value", idx)
+		}
+		if _, err := hex.DecodeString(val); err != nil {
+			return nil, fmt.Errorf("--pcr %d value must be hex: %w", idx, err)
+		}
+		tags[fmt.Sprintf("%s%d", amitag.TagPCRPrefix, idx)] = val
+	}
+	return tags, nil
 }
 
 // contextWithTimeout returns a background context.
