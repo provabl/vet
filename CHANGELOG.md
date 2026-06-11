@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`vet ami-reference`** (provabl#13): records a vetted AMI's known-good boot measurements as locked
+  `attest:pcr<N>` tags (`--pcr <index>=<hex>`, repeatable), so a running instance can be bound to the
+  vetted image — the kernel appraisers already check `expected_pcr<N>`. NitroTPM/enclave PCRs can't be
+  computed offline, so the values come from a trusted reference boot's `.nitro`/`.tpm` attestation
+  output (runbook in README). The tags are locked to the vetter by ground's lockdown SCP. Index/hex
+  validated; written via the existing EC2 tagger.
 - **`vet preflight`** (provabl#16): verifies the calling principal holds the IAM action vet's AMI
   vetter needs (`ec2:CreateTags`) via read-only `iam:SimulatePrincipalPolicy` against the caller ARN.
   Renders ✓/✗ per action with remediation; exits non-zero on any deny; fail-closed on an un-callable
