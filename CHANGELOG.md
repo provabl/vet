@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Added
+
+- **AMI vetting** (provabl#13, slice 2): `vet gate ami-… --tag-vetted` writes the `attest:vetted=true`
+  tag to an AWS AMI via the EC2 API when the gate passes — the producer for ground's AMI-launch-gating
+  SCP (which permits `ec2:RunInstances` only for AMIs carrying that tag). Fail-closed: a failing gate
+  writes no tag. New `internal/amitag` (an injectable `Tagger` seam; AWS EC2 `CreateTags` in
+  production, a fake in tests), the `ami-` target branch, and `--tag-vetted`/`--region` flags. Adds
+  the AWS SDK (`aws-sdk-go-v2`, `service/ec2`). v1 asserts provenance/verdict + an authenticated
+  vetter marking; deep AMI-content scanning and the runtime golden-PCR0 binding are deferred (see
+  README + provabl#13). Validated by writing the tag to a real AMI.
+
 ### Changed
 
 - **CI/release actions bumped to Node-24 runtimes**: `actions/checkout@v4→v6`,
