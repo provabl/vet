@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`vet preflight`** (provabl#16): verifies the calling principal holds the IAM action vet's AMI
+  vetter needs (`ec2:CreateTags`) via read-only `iam:SimulatePrincipalPolicy` against the caller ARN.
+  Renders ✓/✗ per action with remediation; exits non-zero on any deny; fail-closed on an un-callable
+  check. New `internal/preflight` (mock-driven tests). Mirrors attest/ground; each suite tool carries
+  its own copy (the kernel is the only shared dep). See `docs/required-permissions.md`.
 - **AMI vetting** (provabl#13, slice 2): `vet gate ami-… --tag-vetted` writes the `attest:vetted=true`
   tag to an AWS AMI via the EC2 API when the gate passes — the producer for ground's AMI-launch-gating
   SCP (which permits `ec2:RunInstances` only for AMIs carrying that tag). Fail-closed: a failing gate
