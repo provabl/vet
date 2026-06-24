@@ -17,6 +17,15 @@ Part of the [Provabl](https://provabl.dev) suite:
 vet verifies software artifacts before they are permitted to access sensitive data in
 an SRE. Where qualify qualifies the *person*, vet qualifies the *software*.
 
+```mermaid
+flowchart LR
+    art["artifact / AMI<br/>(image, binary)"] --> vet["<b>vet</b><br/>sign · SLSA · SBOM · CVE"]
+    vet --> gate[".vet/gate-result.json"]
+    vet --> amitag["attest:vetted / attest:pcr&lt;N&gt; tags"]
+    gate -->|"context.workload.*"| attest["<b>attest</b><br/>Cedar PDP"]
+    amitag -->|"gated by"| scp["<b>ground</b> AMI SCP"]
+```
+
 ```bash
 vet sign    image:tag            # sign artifact via Sigstore keyless
 vet verify  image:tag            # verify SLSA provenance + CVE status
