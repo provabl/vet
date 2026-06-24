@@ -35,6 +35,18 @@ vet gate    ami-0abc --tag-vetted  # vet an AWS AMI and tag attest:vetted=true (
 vet ami-reference ami-0abc --pcr 0=… # record golden boot PCR(s) on a vetted AMI (see below)
 ```
 
+## Install
+
+```bash
+go install github.com/provabl/vet/cmd/vet@latest   # requires Go 1.26.4+
+# or build from a clone: go build ./cmd/vet
+```
+
+**Prerequisites.** Go 1.26.4+, the external tools below (cosign/gh/syft, each only for the checks that
+use it), and — for AMI vetting — AWS credentials with `ec2:CreateTags` as the vetter principal (run
+`vet preflight` to check). CVE checks reach the OSV API over HTTPS; no AWS access is needed for the
+software (sign/verify/sbom/gate) flow.
+
 ## Required external tools
 
 vet shells out to standard supply-chain tools; each is needed only for the checks that use it:
