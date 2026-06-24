@@ -35,6 +35,15 @@ vet gate    ami-0abc --tag-vetted  # vet an AWS AMI and tag attest:vetted=true (
 vet ami-reference ami-0abc --pcr 0=… # record golden boot PCR(s) on a vetted AMI (see below)
 ```
 
+## Core concepts
+
+The handful of ideas to hold (terms link to the suite [glossary](https://github.com/provabl/provabl/blob/main/docs/guide/glossary.md)):
+
+- **[SLSA](https://github.com/provabl/provabl/blob/main/docs/guide/glossary.md#slsa) provenance** — how trustworthy an artifact's build chain is; vet verifies the level via [cosign/Sigstore](https://github.com/provabl/provabl/blob/main/docs/guide/glossary.md#cosign--sigstore).
+- **[SBOM](https://github.com/provabl/provabl/blob/main/docs/guide/glossary.md#sbom-software-bill-of-materials) + [CVE](https://github.com/provabl/provabl/blob/main/docs/guide/glossary.md#cve) check** — vet generates the bill of materials and checks each package against known vulnerabilities (OSV); **fails closed** if a requested check can't run.
+- **[Lowered attribute](https://github.com/provabl/provabl/blob/main/docs/guide/glossary.md#lowered-attribute)** — vet's verdict becomes `.vet/gate-result.json` (→ `context.workload.*`) and, for AMIs, the `attest:vetted` / `attest:pcr<N>` tags attest/ground gate on.
+- **vet the software, not the person** — vet qualifies *artifacts*; qualify qualifies *people*. Together they cover both things that must be trusted before data access.
+
 ## Install
 
 ```bash
