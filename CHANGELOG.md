@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+
+- **Added a `Security Scan` workflow** (`.github/workflows/security.yml`): govulncheck + Trivy filesystem (dependency) + Trivy IaC scans on every push/PR and weekly, blocking on HIGH/CRITICAL. Trivy pinned to `v0.36.0`. Brings this repo in line with the rest of the suite — every Provabl tool now self-scans, fitting a security/compliance suite.
 - **`vet ami-reference`** (provabl#13): records a vetted AMI's known-good boot measurements as locked
   `attest:pcr<N>` tags (`--pcr <index>=<hex>`, repeatable), so a running instance can be bound to the
   vetted image — the kernel appraisers already check `expected_pcr<N>`. NitroTPM/enclave PCRs can't be
