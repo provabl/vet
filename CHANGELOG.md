@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`amiscan` live Mounter — volume lifecycle with guaranteed teardown** (provabl/vet#32, slice 4):
+  the `Mounter` impl that turns a backing snapshot into a scannable filesystem — `CreateVolume(from
+  snapshot) → Attach(to helper) → remote mount + syft → [Release] Detach + Delete`. Two scope choices
+  keep teardown small and safe: vet **never creates/terminates the helper instance** (the operator
+  supplies a running, SSM-managed, syft-equipped instance), so vet only ever creates a *volume + an
+  attachment*; and vet **never touches the AMI's own backing snapshot** — it scans a fresh volume made
+  *from* it and deletes the copy. The volume lifecycle and the remote scan are separate seams
+  (`VolumeManager`, `RemoteScanner`) so the bug-prone part — **the volume is detached and deleted on
+  every failure path** (create-fails / attach-fails / scan-fails / detach-errors-but-delete-still-runs)
+  — is fully fake-tested without AWS. The thin live adapters (EC2 volume calls; SSM+S3 remote scan,
+  S3 because a full-AMI SBOM exceeds SSM's inline output cap) + live validation are the final slice.
+
 - **`internal/amiscan` — AMI content-scan orchestration** (provabl/vet#32, slice 3): an AMI's contents
   aren't directly scannable — you reach them through snapshot → volume → attach → mount → syft. This
   slice ships the **orchestration core** (resolve the AMI's backing EBS snapshot, drive the steps, and
