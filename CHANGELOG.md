@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`internal/amiscan` — AMI content-scan orchestration** (provabl/vet#32, slice 3): an AMI's contents
+  aren't directly scannable — you reach them through snapshot → volume → attach → mount → syft. This
+  slice ships the **orchestration core** (resolve the AMI's backing EBS snapshot, drive the steps, and
+  **guarantee teardown even on failure**) behind two seams: `ImageInspector` (read-only EC2
+  `DescribeImages`, resolves the backing snapshot — root-device-preferred, first-EBS fallback) and
+  `Mounter` (the live-only snapshot→filesystem→SBOM step). `Scan` returns an **SBOM path** (not a
+  verdict) for the grype `cve.Source` to scan — keeping CVE matching in `internal/cve` and AWS plumbing
+  here. Fully fake-tested incl. the leak-safety cases (a mount that yields no SBOM is still released;
+  no mount → no release returned); the EC2 inspector's resolution validated read-only against a real
+  AL2023 AMI. The live `Mounter` impl (EBS attach + mount + syft, with full resource teardown) is the
+  next slice — it creates real resources, so it lands with live validation, not in CI.
+
 - **`cve.GrypeSource` — distro-aware CVE scanning for AMIs** (provabl/vet#32, slice 2): a second
   `cve.Source` that scans the **SBOM document** with grype (anchore/grype), which is distro-advisory
   aware (matches Amazon Linux / RHEL / Debian packages against their security feeds, e.g. Amazon ALAS)
