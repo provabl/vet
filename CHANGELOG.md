@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+### Fixed
+
+- **AMI scan: discover the attached disk via `lsblk` instead of guessing the device name**
+  (provabl/vet#32): live validation surfaced that on **Nitro instances an EBS volume attached as
+  `/dev/sdf` surfaces as an NVMe device** (`/dev/nvme1n1`), so the remote script's `${DEV}1`/`${DEV}p1`
+  name-guessing failed with `special device /dev/sdfp1 does not exist`. The remote script now discovers
+  the freshly-attached disk via `lsblk` (the unmounted disk that isn't the running root) and mounts its
+  largest partition read-only; the requested device is a hint only. Verified live: a real AL2023 AMI
+  scanned to a 1549-component CycloneDX SBOM (`scanning /dev/nvme1n1p1 (requested /dev/sdf)`).
+
 ### Added
 
 - **`vet ami-scan` — deep AMI content scanning, end to end** (provabl/vet#32, slice 6): the CLI that

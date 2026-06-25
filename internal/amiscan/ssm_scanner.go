@@ -61,20 +61,49 @@ func NewSSMScanner(ctx context.Context, region, bucket, localDir string) (Remote
 	}, nil
 }
 
-// remoteScript mounts the device read-only, syfts it, and uploads the SBOM to S3.
-// It is deliberately defensive: mount read-only (-o ro) so the scan can never
-// mutate the evidence, and always attempt an unmount. {{DEVICE}}/{{KEY}} are
-// substituted; the bucket is passed via the script for a single self-contained
-// command document.
+// remoteScript mounts the attached scan volume read-only, syfts it, and uploads
+// the SBOM to S3. It does NOT trust the requested device name: on Nitro instances
+// an EBS volume attached as /dev/sdf surfaces as an NVMe device (/dev/nvme1n1),
+// so the name we asked for may not exist. Instead it discovers the freshly-
+// attached disk via lsblk (the block device with no mountpoint and no mounted
+// children) and mounts its largest partition (or the whole disk). It mounts
+// read-only (-o ro) so the scan can never mutate the evidence, tries common root
+// filesystems, and always unmounts. The requested device (%s) is passed only as a
+// hint/log. Args: deviceHint, bucket, key.
 const remoteScript = `set -euo pipefail
-DEV="%s"
+DEV_HINT="%s"
 BUCKET="%s"
 KEY="%s"
 MNT="$(mktemp -d)"
 cleanup() { umount "$MNT" 2>/dev/null || true; rmdir "$MNT" 2>/dev/null || true; }
 trap cleanup EXIT
-# The attached snapshot's root partition: try the whole device, then partition 1.
-mount -o ro "$DEV" "$MNT" 2>/dev/null || mount -o ro "${DEV}1" "$MNT" 2>/dev/null || mount -o ro "${DEV}p1" "$MNT"
+
+# Find the attached scan disk: a whole disk (TYPE=disk) with no mountpoint and no
+# mounted partitions — i.e. not the running root disk. Prefer the smallest such
+# disk (the scan volume is the AMI's root, typically smaller than any data disk).
+find_target() {
+  local best="" bestsize=0
+  while read -r name type mnt; do
+    [ "$type" = "disk" ] || continue
+    local dev="/dev/$name"
+    # skip if the disk or any of its partitions is mounted
+    if lsblk -nro MOUNTPOINT "$dev" | grep -q .; then continue; fi
+    # candidate: pick the partition with the largest size, else the disk itself
+    local part
+    part="$(lsblk -nro NAME,TYPE,SIZE "$dev" | awk '$2=="part"{print $1" "$3}' | sort -k2 -h | tail -1 | awk '{print $1}')"
+    if [ -n "$part" ]; then echo "/dev/$part"; else echo "$dev"; fi
+    return 0
+  done < <(lsblk -dnro NAME,TYPE,MOUNTPOINT)
+  return 1
+}
+
+TARGET="$(find_target || true)"
+if [ -z "$TARGET" ]; then echo "no unmounted scan disk found (hint was $DEV_HINT)" >&2; lsblk >&2; exit 1; fi
+echo "scanning $TARGET (requested $DEV_HINT)" >&2
+
+mount -o ro "$TARGET" "$MNT" 2>/dev/null \
+  || mount -o ro,nouuid "$TARGET" "$MNT" 2>/dev/null \
+  || mount "$TARGET" "$MNT"
 syft scan "dir:$MNT" -o cyclonedx-json --file /tmp/ami-sbom.json --quiet
 aws s3 cp /tmp/ami-sbom.json "s3://$BUCKET/$KEY" --only-show-errors
 `

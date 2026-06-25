@@ -76,12 +76,23 @@ func TestScanner_SuccessDownloadsSBOM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	// The remote script must mount read-only and target the attached device.
-	if !strings.Contains(ss.sentScript, "mount -o ro") || !strings.Contains(ss.sentScript, "/dev/sdf") {
-		t.Errorf("script missing read-only mount of the device:\n%s", ss.sentScript)
+	// The remote script must mount read-only and run syft.
+	if !strings.Contains(ss.sentScript, "mount -o ro") {
+		t.Errorf("script missing read-only mount:\n%s", ss.sentScript)
 	}
 	if !strings.Contains(ss.sentScript, "syft scan") {
 		t.Errorf("script does not run syft:\n%s", ss.sentScript)
+	}
+	// Regression (live-found, Nitro): the script must DISCOVER the attached disk
+	// via lsblk, not guess "${DEV}1"/"${DEV}p1" from the requested name — on Nitro
+	// an EBS volume attached as /dev/sdf surfaces as /dev/nvme1n1, so name-guessing
+	// fails ("special device /dev/sdfp1 does not exist"). The requested device is a
+	// hint only.
+	if !strings.Contains(ss.sentScript, "lsblk") {
+		t.Errorf("script must discover the device via lsblk (Nitro NVMe remapping), got:\n%s", ss.sentScript)
+	}
+	if strings.Contains(ss.sentScript, `"${DEV}1"`) || strings.Contains(ss.sentScript, `"${DEV}p1"`) {
+		t.Errorf("script must not name-guess partitions from the requested device:\n%s", ss.sentScript)
 	}
 	// S3 key is instance-scoped; the SBOM is downloaded locally.
 	if !strings.Contains(s3c.gotKey, "i-helper") {
