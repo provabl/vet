@@ -5,7 +5,7 @@
 vet is the software supply chain layer of the Provabl suite.
 It verifies software artifacts before they can access sensitive data in an SRE.
 
-**Tagline**: ground your infrastructure, attest your controls, qualify your people, vet your software.
+**Tagline**: ground your infrastructure, attest your controls, qualify your people, vet your software, steward your data.
 
 ## What vet does
 

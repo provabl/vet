@@ -8,7 +8,7 @@ Part of the [Provabl](https://provabl.dev) suite:
 - **[qualify](https://qualify.provabl.dev)** — train and qualify researchers
 - **vet** — vet your software ← you are here
 
-> Ground your infrastructure, attest your controls, qualify your people, vet your software.
+> Ground your infrastructure, attest your controls, qualify your people, vet your software, steward your data.
 
 ---
 
