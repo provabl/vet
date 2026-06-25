@@ -65,6 +65,27 @@ func New(inspector ImageInspector, mounter Mounter) *Scanner {
 	return &Scanner{inspector: inspector, mounter: mounter}
 }
 
+// NewLive assembles a Scanner wired to AWS: a read-only EC2 inspector and a live
+// Mounter (EC2 volume lifecycle + SSM/S3 remote syft). cfg names the
+// operator-provided helper instance; bucket is the S3 SBOM staging bucket;
+// localDir is where the SBOM lands. This is the production constructor the CLI's
+// deep-scan path uses; the seam-based New stays for tests and custom wiring.
+func NewLive(ctx context.Context, region, bucket, localDir string, cfg Config) (*Scanner, error) {
+	inspector, err := NewEC2Inspector(ctx, region)
+	if err != nil {
+		return nil, err
+	}
+	vols, err := NewEC2VolumeManager(ctx, region)
+	if err != nil {
+		return nil, err
+	}
+	scanner, err := NewSSMScanner(ctx, region, bucket, localDir)
+	if err != nil {
+		return nil, err
+	}
+	return New(inspector, NewMounter(vols, scanner, cfg)), nil
+}
+
 // Scan resolves the AMI's backing snapshot, mounts it, and returns the path to
 // the SBOM syft produced — for a cve.Source to scan. The returned release tears
 // down everything created for the scan; the caller MUST call it (typically

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`amiscan` live AWS adapters — EC2 volumes + SSM/S3 remote syft** (provabl/vet#32, slice 5): the thin
+  adapters behind the slice-4 seams. `ec2Volumes` (`VolumeManager`) makes the EC2
+  `CreateVolume`(from snapshot, gp3, tagged `vet:ephemeral`) / `AttachVolume` / `DetachVolume` /
+  `DeleteVolume` calls, each waiting on the right state transition (available → in-use → available)
+  before the next step. `ssmScanner` (`RemoteScanner`) sends an `AWS-RunShellScript` that mounts the
+  attached device **read-only** (`-o ro`, so the scan can't mutate the evidence), runs syft to a
+  CycloneDX SBOM, and uploads it to an S3 staging bucket (S3 because a full-AMI SBOM exceeds SSM's
+  inline output cap), then downloads it locally; it polls the command to a terminal state and surfaces
+  remote stderr on failure. `amiscan.NewLive` assembles the whole live `Scanner` (inspector + volume
+  manager + remote scanner). Adds the SSM + S3 SDKs. SSM-scanner lifecycle is fake-tested
+  (success-downloads / remote-failure-surfaces-stderr / bucket-required / poll-timeout); the EC2 volume
+  calls are thin waiter wrappers. The CLI `vet verify ami-… --deep-scan` wiring + live validation are
+  the final slice.
+
 - **`amiscan` live Mounter — volume lifecycle with guaranteed teardown** (provabl/vet#32, slice 4):
   the `Mounter` impl that turns a backing snapshot into a scannable filesystem — `CreateVolume(from
   snapshot) → Attach(to helper) → remote mount + syft → [Release] Detach + Delete`. Two scope choices
