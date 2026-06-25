@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/provabl/vet/internal/cve"
 	"github.com/provabl/vet/internal/store"
 )
 
@@ -39,7 +40,11 @@ func newTestVerifier(t *testing.T, osv *stubTransport) (*Verifier, *store.Store)
 	t.Helper()
 	s := store.New(t.TempDir())
 	v := NewWithRunner(stubRunner{}, s)
-	v.http = &http.Client{Transport: osv}
+	client := &http.Client{Transport: osv}
+	v.http = client
+	// Point the CVE source at the same stub transport so checkCVEs delegates to a
+	// fake OSV (the seam keeps the existing OSV behaviour as the default source).
+	v.WithCVESource(cve.NewOSVSource(client))
 	return v, s
 }
 

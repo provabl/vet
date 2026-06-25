@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`internal/cve` — a pluggable CVE-scanning seam** (provabl/vet#32, slice 1): extracted CVE scanning
+  behind a `cve.Source` interface (`Scan(ctx, []sbom.Package) (Verdict, error)`), with the existing
+  per-package OSV query as the default `OSVSource`. The Verifier delegates to a configurable source
+  (`WithCVESource`), defaulting to OSV — no behaviour change for container/binary SBOMs. This is the
+  foundation for AMI deep-content scanning: a live both-source test (commented on vet#32) showed the
+  two viable AMI sources have *different* sharp edges — Amazon Inspector (managed, ALAS-native, but
+  billable + gated on a managed/agentless instance) vs. EBS-snapshot→syft→distro-matcher (self-contained,
+  but a **naive OSV `Linux` query returns false-clean for Amazon Linux packages** because OSV's `Linux`
+  ecosystem is upstream-kernel-scoped, not ALAS-aware) — so CVE scanning is now a strategy, not a
+  hardcoded call. The OSV source honestly reports unresolvable (bare-name) packages as *scanned: 0*
+  rather than passing them. Fail-closed preserved (a source that can't evaluate denies). The `inspector`
+  and `snapshot+grype` AMI sources land in follow-up slices.
 
 - **Added a `Security Scan` workflow** (`.github/workflows/security.yml`): govulncheck + Trivy filesystem (dependency) + Trivy IaC scans on every push/PR and weekly, blocking on HIGH/CRITICAL. Trivy pinned to `v0.36.0`. Brings this repo in line with the rest of the suite — every Provabl tool now self-scans, fitting a security/compliance suite.
 - **`vet ami-reference`** (provabl#13): records a vetted AMI's known-good boot measurements as locked
