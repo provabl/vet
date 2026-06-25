@@ -34,6 +34,11 @@ func osvSourceWith(tr *stubTransport) *OSVSource {
 	return NewOSVSource(&http.Client{Transport: tr})
 }
 
+// scanPkgs scans a package list as a Target (OSV uses Target.Packages).
+func scanPkgs(s *OSVSource, pkgs ...sbom.Package) (Verdict, error) {
+	return s.Scan(context.Background(), Target{Packages: pkgs})
+}
+
 const (
 	osvCritical = `{"vulns":[{"id":"GHSA-x","database_specific":{"severity":"CRITICAL"}}]}`
 	osvHigh     = `{"vulns":[{"id":"GHSA-y","database_specific":{"severity":"HIGH"}}]}`
@@ -48,7 +53,7 @@ func TestOSV_Name(t *testing.T) {
 
 func TestOSV_CriticalFlagged(t *testing.T) {
 	tr := &stubTransport{respFor: func(string) (int, string) { return 200, osvCritical }}
-	v, err := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{{PURL: "pkg:npm/left-pad@1.0.0"}})
+	v, err := scanPkgs(osvSourceWith(tr), sbom.Package{PURL: "pkg:npm/left-pad@1.0.0"})
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -62,7 +67,7 @@ func TestOSV_CriticalFlagged(t *testing.T) {
 
 func TestOSV_HighFlagged(t *testing.T) {
 	tr := &stubTransport{respFor: func(string) (int, string) { return 200, osvHigh }}
-	v, _ := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{{PURL: "pkg:npm/x@1.0.0"}})
+	v, _ := scanPkgs(osvSourceWith(tr), sbom.Package{PURL: "pkg:npm/x@1.0.0"})
 	if v.Critical || !v.High {
 		t.Errorf("expected High only, got %+v", v)
 	}
@@ -70,7 +75,7 @@ func TestOSV_HighFlagged(t *testing.T) {
 
 func TestOSV_CleanPasses(t *testing.T) {
 	tr := &stubTransport{respFor: func(string) (int, string) { return 200, osvClean }}
-	v, err := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{{PURL: "pkg:npm/safe@1.0.0"}})
+	v, err := scanPkgs(osvSourceWith(tr), sbom.Package{PURL: "pkg:npm/safe@1.0.0"})
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -85,7 +90,7 @@ func TestOSV_CleanPasses(t *testing.T) {
 // A transport error mid-scan must fail closed (error, not a clean verdict).
 func TestOSV_TransportErrorFailsClosed(t *testing.T) {
 	tr := &stubTransport{respFor: func(string) (int, string) { return 503, "" }}
-	_, err := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{{PURL: "pkg:npm/x@1.0.0"}})
+	_, err := scanPkgs(osvSourceWith(tr), sbom.Package{PURL: "pkg:npm/x@1.0.0"})
 	if err == nil {
 		t.Fatal("expected fail-closed error on OSV 503")
 	}
@@ -96,7 +101,7 @@ func TestOSV_TransportErrorFailsClosed(t *testing.T) {
 // OSV source honestly reports it scanned nothing rather than falsely passing it.
 func TestOSV_UnresolvablePackageSkipped(t *testing.T) {
 	tr := &stubTransport{respFor: func(string) (int, string) { return 200, osvClean }}
-	v, err := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{{Name: "bash", Version: "5.2.15"}})
+	v, err := scanPkgs(osvSourceWith(tr), sbom.Package{Name: "bash", Version: "5.2.15"})
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -110,7 +115,7 @@ func TestOSV_UnresolvablePackageSkipped(t *testing.T) {
 
 func TestOSV_ByEcosystem(t *testing.T) {
 	tr := &stubTransport{respFor: func(string) (int, string) { return 200, osvCritical }}
-	v, _ := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{{Name: "django", Version: "3.0", Ecosystem: "PyPI"}})
+	v, _ := scanPkgs(osvSourceWith(tr), sbom.Package{Name: "django", Version: "3.0", Ecosystem: "PyPI"})
 	if !v.Critical || v.Scanned != 1 {
 		t.Errorf("ecosystem-keyed package should scan + flag, got %+v", v)
 	}
@@ -124,10 +129,10 @@ func TestOSV_AggregatesAcrossPackages(t *testing.T) {
 		}
 		return 200, osvClean
 	}}
-	v, err := osvSourceWith(tr).Scan(context.Background(), []sbom.Package{
-		{PURL: "pkg:npm/safe@1.0.0"},
-		{PURL: "pkg:npm/bad@1.0.0"},
-	})
+	v, err := scanPkgs(osvSourceWith(tr),
+		sbom.Package{PURL: "pkg:npm/safe@1.0.0"},
+		sbom.Package{PURL: "pkg:npm/bad@1.0.0"},
+	)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}

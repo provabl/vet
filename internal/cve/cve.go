@@ -26,29 +26,43 @@ import (
 	"github.com/provabl/vet/internal/sbom"
 )
 
-// Verdict is the outcome of a CVE scan: whether any scanned package carries a
-// known critical/high vulnerability. It is intentionally coarse — it matches the
+// Verdict is the outcome of a CVE scan: whether the artifact carries a known
+// critical/high vulnerability. It is intentionally coarse — it matches the
 // CVECritical/CVEHigh booleans the gate and the context.workload.* contract use.
-// Scanned reports how many packages were actually evaluated, so a caller can tell
-// a genuine clean result from one where nothing was checked.
+// Scanned reports how many units (packages, or vuln matches) were actually
+// evaluated, so a caller can tell a genuine clean result from one where nothing
+// was checked.
 type Verdict struct {
 	Critical bool
 	High     bool
 	Scanned  int
 }
 
-// Source scans the given packages for known vulnerabilities. A Source must
-// fail closed: if it cannot evaluate the packages (database unreachable, an
-// ecosystem it cannot resolve when the caller demanded a verdict), it returns a
-// non-nil error rather than a falsely-clean Verdict. Returning a clean Verdict
-// means "evaluated, and nothing critical/high was found."
+// Target is what a Source scans. Different sources consume different parts of it —
+// the second implementer (grype) revealed that one input shape doesn't fit all:
+//   - Package-query sources (OSV) match Packages against a vuln database.
+//   - Document sources (grype) consume SBOMPath directly, because the full SBOM
+//     document carries the OS/distro metadata that distro-advisory (ALAS) matching
+//     needs — metadata the minimal Packages list drops.
 //
-// pkgs is the identified package set for the artifact (from an SBOM, or — for an
-// AMI source — enumerated off the image). The Source decides how to match them to
-// advisories; that matching is the whole point of the seam.
+// A Source documents which fields it requires and errors clearly when they're
+// absent (fail-closed), rather than silently scanning nothing.
+type Target struct {
+	// Packages are the parsed package identities from the artifact's SBOM.
+	Packages []sbom.Package
+	// SBOMPath is the path to the full SBOM document on disk, "" when none exists.
+	SBOMPath string
+}
+
+// Source evaluates a Target for known vulnerabilities. A Source must fail closed:
+// if it cannot evaluate the target (database unreachable, a required input
+// missing, the scanner tool absent), it returns a non-nil error rather than a
+// falsely-clean Verdict. Returning a clean Verdict means "evaluated, and nothing
+// critical/high was found." How the matching is done — per-package query, or a
+// distro-aware document scan — is the whole point of the seam.
 type Source interface {
-	// Name identifies the source for logs and records, e.g. "osv".
+	// Name identifies the source for logs and records, e.g. "osv" / "grype".
 	Name() string
-	// Scan evaluates pkgs and returns the critical/high verdict.
-	Scan(ctx context.Context, pkgs []sbom.Package) (Verdict, error)
+	// Scan evaluates the target and returns the critical/high verdict.
+	Scan(ctx context.Context, target Target) (Verdict, error)
 }

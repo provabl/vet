@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`cve.GrypeSource` — distro-aware CVE scanning for AMIs** (provabl/vet#32, slice 2): a second
+  `cve.Source` that scans the **SBOM document** with grype (anchore/grype), which is distro-advisory
+  aware (matches Amazon Linux / RHEL / Debian packages against their security feeds, e.g. Amazon ALAS)
+  — fixing the false-clean gap the live test found, where a naive OSV `Linux` query reports a distro
+  AMI as clean. `vet verify` gains `--cve-source auto|osv|grype` (default `auto`): an `ami-…` target
+  routes to grype, everything else to OSV; an explicit value overrides. The `cve.Source` interface now
+  takes a `Target{Packages, SBOMPath}` — the second implementer revealed one input shape doesn't fit
+  both: OSV queries `Packages`, grype consumes the full `SBOMPath` document (the package list drops the
+  distro metadata grype needs). grype is **fail-closed**: a missing SBOM path, absent grype binary,
+  non-zero exit, or unparseable output all deny rather than pass. New `result.CVECheckRan` so the CLI
+  no longer prints "✓ No critical/high CVEs" when the check actually failed to run. The live AWS wiring
+  (EBS-snapshot → syft) is the next slice; this slice is fully fake-tested (no AWS).
+
 - **`internal/cve` — a pluggable CVE-scanning seam** (provabl/vet#32, slice 1): extracted CVE scanning
   behind a `cve.Source` interface (`Scan(ctx, []sbom.Package) (Verdict, error)`), with the existing
   per-package OSV query as the default `OSVSource`. The Verifier delegates to a configurable source

@@ -47,12 +47,13 @@ func NewOSVSource(client *http.Client) *OSVSource {
 // Name identifies the source.
 func (*OSVSource) Name() string { return "osv" }
 
-// Scan queries OSV for each package and returns the aggregate critical/high
-// verdict. Fail-closed: a transport error mid-scan returns an error (the caller
-// must not pass), rather than under-reporting. A package OSV cannot resolve (no
-// PURL, no ecosystem) is skipped — a bare name is ambiguous across ecosystems —
-// but counted as not-scanned so the caller can see coverage.
-func (s *OSVSource) Scan(ctx context.Context, pkgs []sbom.Package) (Verdict, error) {
+// Scan queries OSV for each package in the target and returns the aggregate
+// critical/high verdict. Fail-closed: a transport error mid-scan returns an error
+// (the caller must not pass), rather than under-reporting. A package OSV cannot
+// resolve (no PURL, no ecosystem) is skipped — a bare name is ambiguous across
+// ecosystems — but counted as not-scanned so the caller can see coverage.
+func (s *OSVSource) Scan(ctx context.Context, target Target) (Verdict, error) {
+	pkgs := target.Packages
 	if len(pkgs) > maxOSVPackages {
 		pkgs = pkgs[:maxOSVPackages]
 	}
