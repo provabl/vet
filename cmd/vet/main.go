@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/provabl/vet/internal/amitag"
+	"github.com/provabl/vet/internal/cve"
 	"github.com/provabl/vet/internal/gate"
 	"github.com/provabl/vet/internal/preflight"
 	"github.com/provabl/vet/internal/sbom"
@@ -142,6 +143,7 @@ func verifyCmd() *cobra.Command {
 	var checkCVEs string
 	var signingID string
 	var vetDir string
+	var cveSource string
 
 	cmd := &cobra.Command{
 		Use:   "verify <artifact>",
@@ -166,7 +168,11 @@ Examples:
   vet verify ./binary --source github.com/org/repo`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVerify(args[0], vetDir, verify.Options{
+			src, err := resolveCVESource(cveSource, args[0])
+			if err != nil {
+				return err
+			}
+			return runVerify(args[0], vetDir, src, verify.Options{
 				Source:         source,
 				MinSLSALevel:   minSLSA,
 				CheckCVEs:      checkCVEs,
@@ -179,12 +185,33 @@ Examples:
 	cmd.Flags().StringVar(&checkCVEs, "check-cves", "", "fail on CVEs at or above: critical, high, medium")
 	cmd.Flags().StringVar(&signingID, "signing-id-regexp", "", "certificate-identity-regexp for cosign")
 	cmd.Flags().StringVar(&vetDir, "vet-dir", ".vet", ".vet directory path")
+	cmd.Flags().StringVar(&cveSource, "cve-source", "auto",
+		"CVE scanner: auto (grype for AMIs, osv otherwise), osv, or grype (distro-aware, needs the grype binary)")
 	return cmd
 }
 
-func runVerify(artifactRef, vetDir string, opts verify.Options) error {
+// resolveCVESource picks the CVE scanner. "auto" routes AMI targets to grype
+// (distro-advisory aware — a naive OSV query is false-clean on a distro AMI,
+// provabl/vet#32) and everything else to OSV; an explicit name overrides.
+func resolveCVESource(name, artifactRef string) (cve.Source, error) {
+	switch name {
+	case "osv":
+		return cve.NewOSVSource(nil), nil
+	case "grype":
+		return cve.NewGrypeSource(), nil
+	case "auto", "":
+		if isAMIRef(artifactRef) {
+			return cve.NewGrypeSource(), nil
+		}
+		return cve.NewOSVSource(nil), nil
+	default:
+		return nil, fmt.Errorf("unknown --cve-source %q (want: auto, osv, grype)", name)
+	}
+}
+
+func runVerify(artifactRef, vetDir string, cveSrc cve.Source, opts verify.Options) error {
 	s := store.New(vetDir)
-	v := verify.New(s)
+	v := verify.New(s).WithCVESource(cveSrc)
 
 	fmt.Printf("Verifying %s...\n", artifactRef)
 	result, err := v.Verify(contextWithTimeout(), artifactRef, opts)
@@ -223,9 +250,10 @@ func runVerify(artifactRef, vetDir string, opts verify.Options) error {
 			}
 		case result.CVEHigh:
 			fmt.Println("  ✗ High CVEs found")
-		case !result.SBOMPresent:
-			// The CVE gate could not run; the policy violation below explains it.
-			fmt.Println("  ✗ CVE check could not run (no SBOM)")
+		case !result.CVECheckRan:
+			// The CVE gate could not run (no SBOM, scanner missing, DB unreachable);
+			// the policy violation below explains the specific reason.
+			fmt.Println("  ✗ CVE check could not run")
 		default:
 			fmt.Println("  ✓ No critical/high CVEs found")
 		}

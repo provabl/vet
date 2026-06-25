@@ -92,6 +92,7 @@ type VerifyResult struct {
 	SBOMPresent     bool
 	CVECritical     bool
 	CVEHigh         bool
+	CVECheckRan     bool // the CVE source actually evaluated (vs. failed to run / not requested)
 	PolicyMet       bool
 	Failures        []string // human-readable failure list
 }
@@ -147,6 +148,7 @@ func (v *Verifier) Verify(ctx context.Context, artifactRef string, opts Options)
 	var cveErr error
 	if opts.CheckCVEs != "" {
 		critical, high, ran, err := v.checkCVEs(ctx, artifactRef)
+		result.CVECheckRan = ran
 		if ran {
 			result.CVECritical = critical
 			result.CVEHigh = high
@@ -305,12 +307,22 @@ func toolAvailable(ctx context.Context, r Runner, name string) bool {
 // sbomPackages loads the parsed package list for an artifact, trying SPDX then
 // CycloneDX. Returns nil when no parseable, non-empty SBOM exists.
 func (v *Verifier) sbomPackages(artifactRef string) []sbom.Package {
+	pkgs, _ := v.sbomTarget(artifactRef)
+	return pkgs
+}
+
+// sbomTarget loads both the parsed package list AND the on-disk SBOM path for an
+// artifact, trying SPDX then CycloneDX. The path lets a document source (grype)
+// consume the full SBOM (with distro metadata), while package-query sources (OSV)
+// use the parsed list. Returns (nil, "") when no parseable, non-empty SBOM exists.
+func (v *Verifier) sbomTarget(artifactRef string) ([]sbom.Package, string) {
 	for _, format := range []string{"spdx", "cyclonedx"} {
-		if pkgs, err := sbom.Load(v.store.SBOMPath(artifactRef, format)); err == nil && len(pkgs) > 0 {
-			return pkgs
+		path := v.store.SBOMPath(artifactRef, format)
+		if pkgs, err := sbom.Load(path); err == nil && len(pkgs) > 0 {
+			return pkgs, path
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 // checkCVEs loads the artifact's SBOM and delegates to the configured CVE source.
@@ -319,13 +331,13 @@ func (v *Verifier) sbomPackages(artifactRef string) []sbom.Package {
 // not pass). The scanning strategy itself lives in internal/cve — OSV by default,
 // a distro-aware source for AMIs (provabl/vet#32).
 func (v *Verifier) checkCVEs(ctx context.Context, artifactRef string) (critical, high, ran bool, err error) {
-	pkgs := v.sbomPackages(artifactRef)
+	pkgs, sbomPath := v.sbomTarget(artifactRef)
 	if pkgs == nil {
 		return false, false, false, fmt.Errorf("no SBOM present — run 'vet sbom %s' first", artifactRef)
 	}
-	verdict, scanErr := v.cveSource.Scan(ctx, pkgs)
+	verdict, scanErr := v.cveSource.Scan(ctx, cve.Target{Packages: pkgs, SBOMPath: sbomPath})
 	if scanErr != nil {
-		// Source could not evaluate (DB unreachable, …): fail closed.
+		// Source could not evaluate (DB unreachable, tool missing, …): fail closed.
 		return false, false, false, scanErr
 	}
 	return verdict.Critical, verdict.High, true, nil
