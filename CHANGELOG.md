@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Added
 
+- **`vet ami-scan` — deep AMI content scanning, end to end** (provabl/vet#32, slice 6): the CLI that
+  ties the pipeline together. `vet ami-scan <ami-id> --helper-instance i-… --az … --scan-bucket …`
+  resolves the AMI's backing snapshot, mounts a copy read-only on the operator's helper instance,
+  syfts the filesystem, and stores the SBOM where `vet verify <ami-id> --check-cves <level>` reads it
+  (AMIs auto-route to the distro-aware grype scanner). vet creates a volume + attachment and tears them
+  down when done — never the helper instance, never the AMI's own snapshot. Arg/flag validation
+  fake-tested. Closes the AMI deep-content-scan gap end to end — the last remaining item of the
+  AMI-gating epic (provabl#13).
+
 - **`amiscan` live AWS adapters — EC2 volumes + SSM/S3 remote syft** (provabl/vet#32, slice 5): the thin
   adapters behind the slice-4 seams. `ec2Volumes` (`VolumeManager`) makes the EC2
   `CreateVolume`(from snapshot, gp3, tagged `vet:ephemeral`) / `AttachVolume` / `DetachVolume` /

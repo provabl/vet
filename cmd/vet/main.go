@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/provabl/vet/internal/amiscan"
 	"github.com/provabl/vet/internal/amitag"
 	"github.com/provabl/vet/internal/cve"
 	"github.com/provabl/vet/internal/gate"
@@ -45,7 +47,7 @@ Where qualify qualifies the person, vet qualifies the software.
   vet gate    image:tag            # write Cedar workload attributes for attest`,
 		Version: version,
 	}
-	cmd.AddCommand(signCmd(), verifyCmd(), sbomCmd(), gateCmd(), amiReferenceCmd(), preflightCmd())
+	cmd.AddCommand(signCmd(), verifyCmd(), sbomCmd(), gateCmd(), amiReferenceCmd(), amiScanCmd(), preflightCmd())
 	return cmd
 }
 
@@ -188,6 +190,109 @@ Examples:
 	cmd.Flags().StringVar(&cveSource, "cve-source", "auto",
 		"CVE scanner: auto (grype for AMIs, osv otherwise), osv, or grype (distro-aware, needs the grype binary)")
 	return cmd
+}
+
+// amiScanCmd runs deep AMI content scanning: it resolves the AMI's backing EBS
+// snapshot, materialises its filesystem on an operator-provided helper instance,
+// syfts it, and stores the SBOM where `vet verify ami-… --check-cves` (which
+// auto-routes AMIs to the distro-aware grype source) then reads it. This is the
+// live half of provabl/vet#32 — it creates a volume + attachment (never an
+// instance, never the AMI's own snapshot) and tears them down when done.
+func amiScanCmd() *cobra.Command {
+	var region, helperInstance, az, device, bucket, vetDir string
+	cmd := &cobra.Command{
+		Use:   "ami-scan <ami-id>",
+		Short: "Deep-scan an AMI's contents (snapshot → syft) into a stored SBOM",
+		Long: `Resolve the AMI's backing EBS snapshot, mount a copy of it read-only on a
+helper instance, run syft over its filesystem, and store the resulting SBOM so
+'vet verify <ami-id> --check-cves <level>' can gate on it (AMIs auto-route to the
+distro-aware grype scanner).
+
+vet creates a volume from the snapshot and attaches it to the helper, then
+detaches and deletes that volume when done — it never creates/terminates the
+helper instance and never touches the AMI's own snapshot.
+
+Prerequisites (operator-provided):
+  --helper-instance  a running, SSM-managed, syft- + awscli-equipped EC2 instance
+  --az               the helper's availability zone (the scan volume must match)
+  --scan-bucket      an S3 bucket the helper can PutObject and you can GetObject
+
+Example:
+  vet ami-scan ami-0abc --helper-instance i-0helper --az us-east-1a \
+      --scan-bucket my-vet-staging
+  vet verify ami-0abc --check-cves high`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			amiID := args[0]
+			if !isAMIRef(amiID) {
+				return fmt.Errorf("expected an AMI id (ami-...), got %q", amiID)
+			}
+			if helperInstance == "" || az == "" || bucket == "" {
+				return fmt.Errorf("--helper-instance, --az, and --scan-bucket are required")
+			}
+			return runAMIScan(cmd.Context(), amiID, region, vetDir, bucket,
+				amiscan.Config{InstanceID: helperInstance, AZ: az, Device: device})
+		},
+	}
+	cmd.Flags().StringVar(&region, "region", "us-east-1", "AWS region")
+	cmd.Flags().StringVar(&helperInstance, "helper-instance", "", "running SSM-managed, syft-equipped helper EC2 instance (required)")
+	cmd.Flags().StringVar(&az, "az", "", "the helper instance's availability zone (required)")
+	cmd.Flags().StringVar(&device, "device", "/dev/sdf", "device name to attach the scan volume at")
+	cmd.Flags().StringVar(&bucket, "scan-bucket", "", "S3 bucket for the SBOM hand-off (required)")
+	cmd.Flags().StringVar(&vetDir, "vet-dir", ".vet", ".vet directory path")
+	return cmd
+}
+
+// runAMIScan drives the amiscan pipeline and copies the produced SBOM into the
+// store at the AMI's CycloneDX path, so the existing verify/gate CVE path finds it.
+func runAMIScan(ctx context.Context, amiID, region, vetDir, bucket string, cfg amiscan.Config) error {
+	s := store.New(vetDir)
+	if err := s.Init(); err != nil {
+		return err
+	}
+	scanner, err := amiscan.NewLive(ctx, region, bucket, vetDir, cfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Deep-scanning %s (snapshot → syft on %s)...\n", amiID, cfg.InstanceID)
+	sbomPath, release, err := scanner.Scan(ctx, amiID)
+	if release != nil {
+		defer func() {
+			if rerr := release(ctx); rerr != nil {
+				fmt.Fprintf(os.Stderr, "warning: scan-volume teardown: %v\n", rerr)
+			}
+		}()
+	}
+	if err != nil {
+		return fmt.Errorf("ami content scan: %w", err)
+	}
+
+	dest := s.SBOMPath(amiID, "cyclonedx")
+	if err := copyFile(sbomPath, dest); err != nil {
+		return fmt.Errorf("store SBOM: %w", err)
+	}
+	fmt.Printf("✓ SBOM stored at %s\n", dest)
+	fmt.Printf("  Next: vet verify %s --check-cves high   (auto-routes to grype)\n", amiID)
+	return nil
+}
+
+// copyFile copies src to dst (the store's SBOM path).
+func copyFile(src, dst string) error {
+	in, err := os.Open(src) // #nosec G304 — scanner-produced path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.Create(dst) // #nosec G304 — store-derived path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 // resolveCVESource picks the CVE scanner. "auto" routes AMI targets to grype
