@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-21
+
 ### Fixed
 
 - **Bump Go 1.26.4 → 1.26.5** to clear **GO-2026-5856** (a `crypto/tls` standard-library vulnerability, fixed in go1.26.5). govulncheck flagged it as symbol-reachable via vet's TLS calls (OSV API, EC2/S3, HTTPS). Toolchain bump only — no code changes.
@@ -187,7 +189,8 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 - **`vet.provabl.dev`** documentation site (GitHub Pages).
 - Test coverage: sign, verify, store, gate with mock runner interface.
 
-[Unreleased]: https://github.com/provabl/vet/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/provabl/vet/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/provabl/vet/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/provabl/vet/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/provabl/vet/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/provabl/vet/releases/tag/v0.1.0
