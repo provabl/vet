@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/
 
 ### Fixed
 
+- **Bump Go 1.26.4 → 1.26.5** to clear **GO-2026-5856** (a `crypto/tls` standard-library vulnerability, fixed in go1.26.5). govulncheck flagged it as symbol-reachable via vet's TLS calls (OSV API, EC2/S3, HTTPS). Toolchain bump only — no code changes.
 - **AMI scan: discover the attached disk via `lsblk` instead of guessing the device name**
   (provabl/vet#32): live validation surfaced that on **Nitro instances an EBS volume attached as
   `/dev/sdf` surfaces as an NVMe device** (`/dev/nvme1n1`), so the remote script's `${DEV}1`/`${DEV}p1`
